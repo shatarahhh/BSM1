@@ -9,3 +9,9 @@ __pycache__/
 # *.npz
 # *.csv
 # *.png
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.DS_Store

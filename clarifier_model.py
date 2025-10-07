@@ -1,4 +1,4 @@
-# In file: clarifier_model.py
+# clarifier_model.py File
 
 import numpy as np
 
@@ -35,8 +35,8 @@ def takacs_clarifier_model(X_clarifier, X_in_total, Q_in, clarifier_params, sett
     Returns:
         tuple: (
             dxdt (array): The derivatives for the 10 layer concentrations.
-            RAS_concs (array): The concentrations of the 6 particulate components in the RAS.
-            effluent_concs (array): The concentrations of the 6 particulate components in the effluent.
+            X_underflow_total (array)
+            X_effluent_total (array)
         )
     """
     # Unpack parameters
@@ -44,11 +44,14 @@ def takacs_clarifier_model(X_clarifier, X_in_total, Q_in, clarifier_params, sett
     N_layers = clarifier_params['N_layers']# Number of layers
     h = clarifier_params['h']              # Height of each layer (m)
     Q_RAS = clarifier_params['Q_RAS']      # Return Activated Sludge (underflow) rate (m^3/day)
+    Q_w = clarifier_params['Q_w']      # Return Activated Sludge (underflow) rate (m^3/day)
     feed_layer = clarifier_params['feed_layer'] # Index of the feed layer (e.g., 4 for the 5th layer)
 
+    Q_u = Q_RAS + Q_w          # Underflow rate (m^3/day)
     # Calculate hydraulic velocities
-    v_up = Q_in / A           # Upflow velocity (overflow)
-    v_down = Q_RAS / A        # Downflow velocity (underflow)
+    Q_eff = Q_in - Q_u
+    v_up = Q_eff / A          # Upflow velocity (overflow)
+    v_down = Q_u / A        # Downflow velocity (underflow)
 
     # Initialize arrays for fluxes
     J_settling = np.zeros(N_layers + 1)
@@ -107,9 +110,9 @@ def takacs_clarifier_model(X_clarifier, X_in_total, Q_in, clarifier_params, sett
 
         # FLUX OUT to the layer below (i+1)
         if i == N_layers - 1:
-            # For the bottom layer, "out" means being removed in the RAS flow.
+            # For the bottom layer, "out" means being removed in the RAS and waste flow (Q_u).
             # There is no settling "out" of the very bottom.
-            flux_down_to_below = Q_RAS * X_clarifier[i]
+            flux_down_to_below = Q_u * X_clarifier[i]
         else:
             # This is the sum of solids carried by bulk water flow and the
             # pre-calculated limiting gravitational flux leaving layer 'i' for 'i+1'.

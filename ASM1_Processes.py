@@ -1,3 +1,5 @@
+# ASM1_Processes.py File
+
 def calculate_process_rates(state, Kin_params):
     """
     Calculates the 8 biological process rates for ASM1 based on the BSM1 standard.
@@ -74,7 +76,7 @@ def calculate_process_rates(state, Kin_params):
     # This occurs under both aerobic and anoxic conditions.
     term_hydrolysis_switch = (S_O / (K_O_H + S_O)) + eta_h * (K_O_H / (K_O_H + S_O)) * (S_NO / (K_NO + S_NO))
     
-    rho_7 = k_h * (X_S / X_H) / (K_X + (X_S / X_H)) * term_hydrolysis_switch * X_H
+    rho_7 = k_h * (X_S / (K_X * X_H + X_S)) * term_hydrolysis_switch * X_H
 
     # Process 8: Hydrolysis of entrapped organic nitrogen
     # This process is biochemically linked to Process 7. It breaks down particulate organic nitrogen (X_ND).

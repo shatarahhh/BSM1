@@ -1,4 +1,4 @@
-# In file: run_simulation.py
+# run_simulation.py File
 
 import numpy as np
 import pandas as pd
@@ -6,8 +6,9 @@ from scipy.interpolate import interp1d
 from scipy.integrate import odeint
 import matplotlib.pyplot as plt
 import os
+os.makedirs('results', exist_ok=True)
 
-from bsm1_simulation import bsm1_plant_model, plant_wide_model
+from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx
 from ASM1_Processes import calculate_process_rates
 
 def get_bsm1_params():
@@ -21,24 +22,7 @@ def get_bsm1_params():
     # The Arrhenius equation is used: K_T = K_20 * exp(theta * (T - 20))
     # For BSM1, the standard temperature is T = 15 deg C.
     
-    T = 15  # Operating temperature
-    T_ref = 20 # Reference temperature
-    
-    # Kinetic parameters at 20 deg C (from BSM1 doc Table 4)
-    mu_H_20 = 4.0   # per day
-    b_H_20 = 0.3    # per day
-    k_h_20 = 3.0    # per day
-    k_a_20 = 0.05   # m^3/(g N * day)
-    mu_A_20 = 0.5   # per day
-    b_A_20 = 0.05   # per day
-
-    # Temperature correction using Arrhenius equation
-    mu_H = mu_H_20 * np.exp(0.0693 * (T - T_ref))
-    b_H = b_H_20 * np.exp(0.0693 * (T - T_ref))
-    k_h = k_h_20 * np.exp(0.0693 * (T - T_ref))
-    k_a = k_a_20 * np.exp(0.0693 * (T - T_ref))
-    mu_A = mu_A_20 * np.exp(0.0693 * (T - T_ref))
-    b_A = b_A_20 * np.exp(0.0693 * (T - T_ref))
+    # Operating temperature T = 15  
     
     stoich_params = {
         # Stoichiometric Parameters (from BSM1 doc Table 3)
@@ -51,20 +35,20 @@ def get_bsm1_params():
 
     Kin_params = {
         # Kinetic Parameters (Temperature Corrected)
-        'mu_H': mu_H,     # Max specific growth rate for heterotrophs
+        'mu_H': 4.0,     # Max specific growth rate for heterotrophs per day
         'K_S': 10.0,      # Substrate half-saturation constant for heterotrophs (g COD/m^3)
         'K_O_H': 0.2,     # Oxygen half-saturation constant for heterotrophs (g -COD/m^3)
         'K_NO': 0.5,      # Nitrate half-saturation constant for heterotrophs (g N/m^3)
-        'b_H': b_H,       # Decay rate for heterotrophs
+        'b_H': 0.3,       # Decay rate for heterotrophs per day
         'eta_g': 0.8,     # Correction factor for anoxic growth of heterotrophs
-        'eta_h': 0.6,     # Correction factor for anoxic hydrolysis
-        'k_h': k_h,       # Hydrolysis rate constant
+        'eta_h': 0.8,     # Correction factor for anoxic hydrolysis
+        'k_h': 3.0,       # Hydrolysis rate constant per day
         'K_X': 0.1,       # Particulate substrate half-saturation constant (g COD/g COD)
-        'mu_A': mu_A,     # Max specific growth rate for autotrophs
+        'mu_A': 0.5,     # Max specific growth rate for autotrophs per day
         'K_NH_A': 1.0,    # Ammonia half-saturation constant for autotrophs (g N/m^3)
         'K_O_A': 0.4,     # Oxygen half-saturation constant for autotrophs (g -COD/m^3)
-        'b_A': b_A,       # Decay rate for autotrophs
-        'k_a': k_a,       # Ammonification rate constant
+        'b_A': 0.05,       # Decay rate for autotrophs per day
+        'k_a': 0.05,       # Ammonification rate constant m3/(g COD⋅d)
     }
     return stoich_params, Kin_params
 
@@ -122,16 +106,43 @@ def get_clarifier_params():
         'N_layers': 10,     # Number of layers
         'h': 0.4,           # Height of each layer (m) -> Total height = 4m
         'Q_RAS': 18446,     # Underflow rate (m^3/day)
+        'Q_w': 385,            # wastage
         'feed_layer': 4,    # Feed enters the 5th layer (0-indexed)
+        'X_t': 3000.0          # clarification threshold
     }
 
 def get_settling_params():
     """Returns a dictionary of the Takács clarifier parameters."""
     return {
         'v0_vesilind':  474.0,   # Max Vesilind settling velocity (m/day)
-        'Kv':           2.86e-3, # Flocculant zone settling parameter (m^3/g)
+        'Kv':           5.76e-4, # hindered settling parameter rₕ (m^3/g)
     }
-# is that kv correcT?
+
+def tss_from_cod(x13):
+    """TSS (gSS/m3) per BSM1: 0.75 * sum(particulate COD)."""
+    x = np.asarray(x13, float)
+    return 0.75 * float(np.sum(x[particulate_cod_idx]))
+
+def stream_compositions_from_state(y):
+    """
+    Given the full state vector y (5*13 + 10), return:
+      eff_13, ras_13, Xe (top-layer TSS), Xu (bottom-layer TSS)
+    """
+    X_reactors  = y[:65].reshape(5, 13)
+    X5          = X_reactors[4, :]
+    y_clarifier = y[65:75]
+
+    # BSM1 feed TSS used for scaling
+    X_tss_feed = tss_from_cod(X5)
+
+    # Clarifier layer TSS (your 10 settler states are MLSS per layer)
+    Xe = float(y_clarifier[0])    # top layer = effluent TSS
+    Xu = float(y_clarifier[-1])   # bottom layer = underflow TSS
+
+    eff_13 = map_particulates_by_tss(X5, Xe, X_tss_feed)  # solubles copied
+    ras_13 = map_particulates_by_tss(X5, Xu, X_tss_feed)  # solubles copied
+    return eff_13, ras_13, Xe, Xu
+
 
 # --- Example of how to use it ---
 if __name__ == '__main__':
@@ -166,54 +177,116 @@ if __name__ == '__main__':
     # --- 3. Define Simulation Time ---
     # Simulate for 14 days, with output every 0.1 days.
     t_span = np.arange(0, 14, 0.1)
+    # t_span = np.arange(0, 1, 10)
 
     # --- 4. Run the Simulation ---
     print("Starting plant-wide simulation... (this may take a moment)")
     solution = odeint(bsm1_plant_model, y0, t_span, 
                       args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params))
-    print("Simulation finished successfully!")
-    # --- 5. Process and Plot Results ---
-    # Reshape the solution back into a 3D matrix: (time, tank, component)
-    # Reshape reactor results: (time, tank, component)
-    results_reactors = solution[:, 0:65].reshape(len(t_span), 5, 13)
-    # Get clarifier results: (time, layer)
-    results_clarifier = solution[:, 65:75]
 
-    # Define the names of the components for plot titles and filenames
-    component_names = ['S_I', 'S_S', 'X_I', 'X_S', 'X_H', 'X_A', 'X_P',
-                    'S_O', 'S_NO', 'S_NH', 'S_ND', 'X_ND', 'S_ALK']
+    # print("solution.shape:", solution.shape)
 
-    # Create a directory for results if it doesn't exist
-    if not os.path.exists('results'):
-        os.makedirs('results')
-    
-    print("\nGenerating and saving reactor plots...")
+    results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
+    # print("results_reactors.shape:", results_reactors.shape)
 
+    results_clarifier = solution[:, 65:75]  # TSS profile (top->bottom or your order)
+    # print("results_clarifier.shape:", results_clarifier.shape)
+
+    # Build effluent & RAS time series from y(t)
+    effluent_ts = np.empty((len(t_span), 13))
+    ras_ts      = np.empty_like(effluent_ts)
+    Xe_ts       = np.empty(len(t_span))
+    Xu_ts       = np.empty(len(t_span))
+    Qe_ts       = np.empty(len(t_span))
+
+    TSS_eff_from_cod = np.empty(len(t_span))
+
+    for i, tt in enumerate(t_span):
+        y_t = solution[i, :]
+        eff_i, ras_i, Xe, Xu = stream_compositions_from_state(y_t)
+        effluent_ts[i, :] = eff_i
+        ras_ts[i, :]      = ras_i
+        Xe_ts[i]          = Xe
+        Xu_ts[i]          = Xu
+
+        # per-step TSS from effluent states:
+        TSS_eff_from_cod[i] = 0.75 * eff_i[particulate_cod_idx].sum()
+
+        # sanity check against top-layer TSS
+        if not np.isclose(TSS_eff_from_cod[i], Xe, rtol=1e-3, atol=1e-6):
+            print(f"WARN t={tt:.3f}: SS_from_COD={TSS_eff_from_cod[i]:.3f} vs Xe={Xe:.3f}")
+
+        # effluent flow
+        Q0_t, _    = get_influent_data(tt)
+        Qe_ts[i]   = float(Q0_t) - float(clarifier_params['Q_w'])
+
+    # Plot effluent components (13 figures)
+    component_names = ['S_I','S_S','X_I','X_S','X_H','X_A','X_P','S_O','S_NO','S_NH','S_ND','X_ND','S_ALK']
     for i in range(13):
-        plt.figure(figsize=(12, 6))
-        plt.plot(t_span, results_reactors[:, 4, i], label=f'{component_names[i]} in Effluent (Tank 5)')
-        plt.title(f'Bioreactor Effluent: {component_names[i]} Concentration')
-        plt.xlabel('Time (days)'); plt.ylabel(f'Concentration (g/m^3)')
+        plt.figure(figsize=(12,6))
+        plt.plot(t_span, effluent_ts[:, i], label=f'{component_names[i]} in Plant Effluent')
+        plt.title(f'Plant Effluent: {component_names[i]}')
+        plt.xlabel('Time (days)'); plt.ylabel('Concentration (g/m^3)')
         plt.legend(); plt.grid(True)
-        plt.savefig(f'results/reactor_{component_names[i]}.png')
-        plt.close()
-    
-    print("Generating and saving clarifier plots...")
-    
-    # Plot Effluent and Underflow TSS from clarifier
-    effluent_TSS = results_clarifier[:, 0]
-    underflow_TSS = results_clarifier[:, -1]
-    
-    plt.figure(figsize=(12, 6))
-    plt.plot(t_span, effluent_TSS, label='Effluent TSS (Top Layer)')
-    plt.plot(t_span, underflow_TSS, label='Underflow TSS (Bottom Layer)')
-    plt.title('Clarifier Performance: Total Suspended Solids (TSS)')
-    plt.xlabel('Time (days)'); plt.ylabel('TSS Concentration (g/m^3)')
-    plt.legend(); plt.grid(True); plt.yscale('log')
-    plt.savefig('results/clarifier_TSS.png')
-    plt.close()
+        plt.savefig(f'results/effluent_{component_names[i]}.png'); plt.close()
 
-    print("\nAll plots have been saved to the 'results' folder.")
+    # Clarifier TSS figure (use Xe, Xu)
+    plt.figure(figsize=(12,6))
+    plt.plot(t_span, TSS_eff_from_cod, label='Effluent TSS from COD states (BSM1)')
+    # Optional: overlay Xe to confirm they coincide
+    plt.plot(t_span, Xe_ts, '--', label='Clarifier top-layer TSS (Xe)', alpha=0.7)
+    plt.title('Plant Effluent TSS'); plt.xlabel('Time (days)'); plt.ylabel('g SS/m^3')
+    plt.legend(); plt.grid(True); plt.yscale('log')
+    plt.savefig('results/effluent_TSS.png'); plt.close()
+
+    # Example 95th percentile required by BSM1:
+    TSSe95 = np.percentile(TSS_eff_from_cod, 95)
+    print("TSSe95 =", TSSe95)
+
+
+    # print("Simulation finished successfully!")
+    # # --- 5. Process and Plot Results ---
+    # # Reshape the solution back into a 3D matrix: (time, tank, component)
+    # # Reshape reactor results: (time, tank, component)
+    # results_reactors = solution[:, 0:65].reshape(len(t_span), 5, 13)
+    # # Get clarifier results: (time, layer)
+    # results_clarifier = solution[:, 65:75]
+
+    # # Define the names of the components for plot titles and filenames
+    # component_names = ['S_I', 'S_S', 'X_I', 'X_S', 'X_H', 'X_A', 'X_P',
+    #                 'S_O', 'S_NO', 'S_NH', 'S_ND', 'X_ND', 'S_ALK']
+
+    # # Create a directory for results if it doesn't exist
+    # if not os.path.exists('results'):
+    #     os.makedirs('results')
+    
+    # print("\nGenerating and saving reactor plots...")
+
+    # for i in range(13):
+    #     plt.figure(figsize=(12, 6))
+    #     plt.plot(t_span, results_reactors[:, 4, i], label=f'{component_names[i]} in Effluent (Tank 5)')
+    #     plt.title(f'Bioreactor Effluent: {component_names[i]} Concentration')
+    #     plt.xlabel('Time (days)'); plt.ylabel(f'Concentration (g/m^3)')
+    #     plt.legend(); plt.grid(True)
+    #     plt.savefig(f'results/reactor_{component_names[i]}.png')
+    #     plt.close()
+    
+    # print("Generating and saving clarifier plots...")
+    
+    # # Plot Effluent and Underflow TSS from clarifier
+    # effluent_TSS = results_clarifier[:, 0]
+    # underflow_TSS = results_clarifier[:, -1]
+    
+    # plt.figure(figsize=(12, 6))
+    # plt.plot(t_span, effluent_TSS, label='Effluent TSS (Top Layer)')
+    # plt.plot(t_span, underflow_TSS, label='Underflow TSS (Bottom Layer)')
+    # plt.title('Clarifier Performance: Total Suspended Solids (TSS)')
+    # plt.xlabel('Time (days)'); plt.ylabel('TSS Concentration (g/m^3)')
+    # plt.legend(); plt.grid(True); plt.yscale('log')
+    # plt.savefig('results/clarifier_TSS.png')
+    # plt.close()
+
+    # print("\nAll plots have been saved to the 'results' folder.")
 
 '''
     # Loop through each of the 13 components
