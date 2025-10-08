@@ -150,3 +150,62 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
     X_underflow_total = X[-1]   # bottom layer
     X_effluent_total  = X[0]    # top layer
     return dxdt, X_underflow_total, X_effluent_total
+
+def takacs_clarifier_soluble_odes(Z_layers, Z_in, Q_in, clarifier_params):
+    """
+    Soluble advection in the 10-layer clarifier per BSM1 (no reactions).
+    Layer ordering follows your convention: index 0 = TOP, index 9 = BOTTOM.
+
+    Args:
+        Z_layers : (N_layers, n_sol) or flat (N_layers*n_sol,)
+                   Soluble concentrations per layer [g/m^3].
+        Z_in     : (n_sol,) solubles in the clarifier feed (from Tank 5) [g/m^3].
+        Q_in     : Clarifier feed flow Q_f [m^3/d] (= Q_e + Q_u).
+        clarifier_params : dict with keys 'A','N_layers','h','Q_RAS','Q_w','feed_layer'.
+
+    Returns:
+        dZdt_flat : (N_layers*n_sol,) time derivatives (flattened)
+        Z_underflow : (n_sol,) solubles in underflow = bottom layer
+        Z_effluent  : (n_sol,) solubles in effluent  = top layer
+    """
+    A          = clarifier_params['A']
+    N_layers   = clarifier_params['N_layers']
+    h          = clarifier_params['h']
+    Q_RAS      = clarifier_params['Q_RAS']
+    Q_w        = clarifier_params['Q_w']
+    feed_layer = clarifier_params['feed_layer']  # 0-based; top=0
+
+    Q_u  = Q_RAS + Q_w          # underflow
+    Q_e  = Q_in - Q_u           # effluent
+    v_up = Q_e / A              # upward superficial velocity [m/d]
+    v_dn = Q_u / A              # downward superficial velocity [m/d]
+
+    Z = np.asarray(Z_layers, dtype=float)
+    if Z.ndim == 1:
+        if Z.size % N_layers != 0:
+            raise ValueError("Z_layers length must be multiple of N_layers")
+        n_sol = Z.size // N_layers
+        Z = Z.reshape(N_layers, n_sol)
+    else:
+        n_sol = Z.shape[1]
+
+    Zin = np.asarray(Z_in, dtype=float).reshape(n_sol,)
+
+    dZ = np.zeros_like(Z)
+
+    # Above feed: upflow from i+1 to i (top index = 0)
+    for i in range(feed_layer):
+        dZ[i, :] = (v_up / h) * (Z[i + 1, :] - Z[i, :])
+
+    # Feed layer: Q_f/A/h * (Z_in - Z_feed)
+    dZ[feed_layer, :] = (Q_in / (A * h)) * (Zin - Z[feed_layer, :])
+
+    # Below feed: downflow from i-1 to i
+    for i in range(feed_layer + 1, N_layers):
+        dZ[i, :] = (v_dn / h) * (Z[i - 1, :] - Z[i, :])
+
+    # Output top/bottom solubles per BSM1
+    Z_effluent  = Z[0, :]       # Ze = layer 0 (top)
+    Z_underflow = Z[-1, :]      # Zu = layer 9 (bottom)
+
+    return dZ.reshape(-1), Z_underflow, Z_effluent

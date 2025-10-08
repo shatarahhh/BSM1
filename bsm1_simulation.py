@@ -2,11 +2,12 @@
 
 import numpy as np
 from ASM1_Processes import calculate_process_rates
-from clarifier_model import takacs_clarifier_model  # clarifier ODE (10 layers)
+from clarifier_model import takacs_clarifier_model, takacs_clarifier_soluble_odes  
 
 # indices: [2..6] are particulate COD; 11 is X_ND (particulate N)
 particulate_cod_idx  = [2, 3, 4, 5, 6] # X_I, X_S, X_H, X_A, X_P
 all_particulate_idx  = [2, 3, 4, 5, 6, 11] # add X_ND
+soluble_idx = [0, 1, 7, 8, 9, 10, 12]  # S_I, S_S, S_O, S_NO, S_NH, S_ND, S_ALK
 
 def map_particulates_by_tss(x_src_13, X_tss_target, MLSS_in_clarifier):
     """
@@ -22,13 +23,19 @@ def map_particulates_by_tss(x_src_13, X_tss_target, MLSS_in_clarifier):
 def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_params, settling_params):
     """
     BSM1 plant dynamics (5 reactors + 10-layer clarifier).
-    y has 75 states: 5*13 (reactors) + 10 (clarifier layers, MLSS).
+    y has 145 states: 5*13 (reactors) + 10 (clarifier MLSS) + 10*7 (clarifier solubles).
     """
 
     # --- 1) Unpack state vector ---
     y_reactors   = y[0:65]
     X_reactors   = y_reactors.reshape(5, 13)     # 5 tanks x 13 ASM1 states
     y_clarifier  = y[65:75]                      # 10-layer MLSS profile (bottom->top or your chosen convention)
+
+    # 10 layers × 7 solubles, flat after the 10 MLSS states
+    N_layers     = clarifier_params['N_layers']  # 10
+    n_sol        = len(soluble_idx)              # 7
+    y_solubles   = y[75:75 + N_layers * n_sol]   # flat soluble layers
+    Z_layers     = y_solubles.reshape(N_layers, n_sol)  # (10,7), top->bottom
 
     # --- 2) Stoichiometry (unchanged) ---
     Y_A = stoich_params['Y_A']
@@ -79,8 +86,17 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
         settling_params
     )
 
+    # --- 5b) Run soluble-layer advection ODEs ---
+    Z_in_feed = X_reactors[4, soluble_idx]  # Tank 5 solubles at the settler influent
+    dZdt_flat, Zu_vec, Ze_vec = takacs_clarifier_soluble_odes(
+        Z_layers, Z_in_feed, Q_to_clarifier, clarifier_params
+    )
+
     # --- 6) Build RAS composition by MLSS ratio (particulates scaled, solubles copied) ---
     RAS_concs_full = map_particulates_by_tss(X_reactors[4, :], X_u_total, MLSS_in_clarifier)
+
+    # underflow solubles = bottom-layer solubles (Zu)
+    RAS_concs_full[soluble_idx] = Zu_vec
 
     # --- 7) Reactor mass balances ---
     dydt_reactors = np.zeros_like(X_reactors)
@@ -114,6 +130,6 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     # print("dydt_reactors.flatten() shape:", dydt_reactors.flatten().shape)
     # print("clar_dxdt shape:", clar_dxdt.shape)
     # --- 8) Pack derivatives ---
-    final_derivatives = np.concatenate([dydt_reactors.flatten(), clar_dxdt])
+    final_derivatives = np.concatenate([dydt_reactors.flatten(), clar_dxdt, dZdt_flat])
     # print("final_derivatives shape:", final_derivatives.shape)
     return final_derivatives

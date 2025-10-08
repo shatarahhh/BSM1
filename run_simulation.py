@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import os
 os.makedirs('results', exist_ok=True)
 
-from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx
+from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx, soluble_idx
 from ASM1_Processes import calculate_process_rates
 
 def get_bsm1_params():
@@ -139,6 +139,11 @@ def stream_compositions_from_state(y):
     X5          = X_reactors[4, :]
     y_clarifier = y[65:75]
 
+    # soluble layers (10 x 7) follow immediately after MLSS
+    N_layers = 10
+    n_sol    = len(soluble_idx)
+    Z_layers = y[75:75 + N_layers * n_sol].reshape(N_layers, n_sol)
+
     # BSM1 feed TSS used for scaling
     X_tss_feed = tss_from_cod(X5)
 
@@ -146,10 +151,17 @@ def stream_compositions_from_state(y):
     Xe = float(y_clarifier[0])    # top layer = effluent TSS
     Xu = float(y_clarifier[-1])   # bottom layer = underflow TSS
 
+    # effluent & underflow solubles from layers
+    Ze_vec = Z_layers[0, :]       # top layer (effluent)
+    Zu_vec = Z_layers[-1, :]      # bottom layer (underflow)
+
     eff_13 = map_particulates_by_tss(X5, Xe, X_tss_feed)  # solubles copied
     ras_13 = map_particulates_by_tss(X5, Xu, X_tss_feed)  # solubles copied
-    return eff_13, ras_13, Xe, Xu
 
+    # overwrite solubles with the layer values
+    eff_13[soluble_idx] = Ze_vec
+    ras_13[soluble_idx] = Zu_vec
+    return eff_13, ras_13, Xe, Xu
 
 # --- Example of how to use it ---
 if __name__ == '__main__':
@@ -177,9 +189,18 @@ if __name__ == '__main__':
     # Initial conditions for the 10 clarifier layers (a reasonable gradient)
     initial_state_clarifier = np.linspace(start=50, stop=8000, num=10) # From clear top to thick bottom
 
+    # initial conditions for the 10×7 soluble layers.
+    # A simple, BSM1-compliant choice is to set all layers equal to Tank 5 solubles.
+    init_Z5 = initial_state_reactors[4, soluble_idx]          # Tank 5 solubles
+    initial_state_clarifier_solubles = np.tile(init_Z5, (10, 1))  # (10,7), top->bottom
+
     # Combine into a single flat vector for the ODE solver
-    y0 = np.concatenate([initial_state_reactors.flatten(), initial_state_clarifier])
-    print("Step 2: Initial conditions defined for 75 states.")
+    y0 = np.concatenate([
+        initial_state_reactors.flatten(),
+        initial_state_clarifier,
+        initial_state_clarifier_solubles.flatten()
+    ])
+    print("Step 2: Initial conditions defined for 145 states.")
 
     # --- 3. Define Simulation Time ---
     # Simulate for 14 days, with output every 0.1 days.
