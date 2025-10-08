@@ -10,6 +10,7 @@ os.makedirs('results', exist_ok=True)
 
 from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx, soluble_idx
 from ASM1_Processes import calculate_process_rates
+from scipy.integrate import solve_ivp
 
 def get_bsm1_params():
     """
@@ -114,8 +115,8 @@ def get_clarifier_params():
 def get_settling_params():
     """Returns a dictionary of the Takács clarifier parameters."""
     return {
-        'velocity_model': 'vesilind', # 'takacs' or 'vesilind'
-        # 'velocity_model': 'takacs', # 'takacs' or 'vesilind'
+        # 'velocity_model': 'vesilind', # 'takacs' or 'vesilind'
+        'velocity_model': 'takacs', # 'takacs' or 'vesilind'
         'v0':  474.0,   # Max Vesilind settling velocity (m/day)
         'Kv':           5.76e-4, # hindered settling parameter rₕ (m^3/g)
         # Takács double-exponential extra parameters
@@ -212,12 +213,31 @@ if __name__ == '__main__':
     # solution = odeint(bsm1_plant_model, y0, t_span, 
     #                   args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params))
 
-    solution, info = odeint(
-        bsm1_plant_model, y0, t_span,
-        args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params),
-        rtol=1e-5, atol=1e-7, full_output=True
+    # solution, info = odeint(
+    #     bsm1_plant_model, y0, t_span,
+    #     args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params),
+    #     rtol=1e-5, atol=1e-7, full_output=True
+    # )
+    # print(info['message']); print('nfe:', info['nfe'], 'nje:', info['nje'], 'nst:', info['nst'])
+    
+    def rhs(t, y):
+        return bsm1_plant_model(y, t, get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params)
+
+    sol = solve_ivp(
+        rhs,
+        t_span=(float(t_span[0]), float(t_span[-1])),
+        y0=y0,
+        t_eval=t_span,
+        method='BDF',              # or 'LSODA'
+        rtol=1e-5,
+        atol=1e-7,
+        max_step=0.05              # days (~72 min); keeps steps reasonable vs. 15 min KPIs
     )
-    print(info['message']); print('nfe:', info['nfe'], 'nje:', info['nje'], 'nst:', info['nst'])
+    if not sol.success:
+        print("Integrator reported:", sol.message)
+
+    solution = sol.y.T
+
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
     # print("results_reactors.shape:", results_reactors.shape)

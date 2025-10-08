@@ -22,21 +22,23 @@ def vesilind_settling_velocity(X, settling_params):
     v_s = v0 * np.exp(-Kv * X_safe)
     return v_s
 
-def takacs_settling_velocity(X, settling_params):
-    """
-    Takács double-exponential with non-settleable fraction f_ns (BSM1, p.9).
-    Uses (X_eff = (1 - f_ns)*X) in the hindered/flocculant terms.
-    """
-    v0  = settling_params['v0']   # m/d  (Vesilind max term used in double exp)
-    v0p = settling_params['v0p']  # m/d  (additional max term)
-    r_h = settling_params['r_h']  # m^3/g (hindered)
-    r_p = settling_params['r_p']  # m^3/g (flocculant)
-    fns = settling_params['f_ns'] # dimensionless
+def takacs_settling_velocity(X, settling_params, X_in_total):
+    v0  = settling_params['v0']    # 474.0 (m/d)
+    v0p = settling_params['v0p']   # 250.0 (m/d)
+    r_h = settling_params['r_h']   # 5.76e-4 (m^3/g)
+    r_p = settling_params['r_p']   # 2.86e-3 (m^3/g)
+    fns = settling_params['f_ns']  # 0.00228 (-)
+    X_f = X_in_total   # <-- set this each call from your clarifier feed TSS
 
-    X = np.maximum(0.0, np.asarray(X, float)) # type: ignore
-    X_eff = (1.0 - fns) * X
-    # Commonly used form consistent with BSM1 data: vs(X) = v0 * exp(-r_h * X_eff) + v0p * exp(-r_p * X_eff)
-    return v0 * np.exp(-r_h * X_eff) + v0p * np.exp(-r_p * X_eff)
+    X    = np.maximum(0.0, np.asarray(X, float))
+    Xmin = fns * float(X_f)
+    Xs   = X - Xmin                  # X* in the docs
+
+    v = v0 * (np.exp(-r_h * Xs) - np.exp(-r_p * Xs))
+    v = np.minimum(v0p, v)           # cap at v0'
+    v_s = np.maximum(0.0, v)        # enforce non-negative
+    return v_s
+
 
 def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settling_params):
     """
@@ -70,11 +72,11 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
 
     # --- States and settling velocities ---
     X = np.maximum(0.0, np.asarray(X_layers, dtype=float)) # type: ignore
-    model = settling_params.get('velocity_model', 'takacs').lower()
+    model = settling_params.get('velocity_model')
     if model == 'vesilind':
         vs = vesilind_settling_velocity(X, settling_params)
     else:
-        vs = takacs_settling_velocity(X, settling_params)
+        vs = takacs_settling_velocity(X, settling_params, X_in_total)
 
     # --- Gravitational flux at interfaces (j = 1..N_layers-1) ---
     # Interface j sits between upper layer (j-1) and lower layer (j).
@@ -85,14 +87,13 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
         upper, lower = j - 1, j
         if j <= feed_layer:
             # Clarification flux with threshold X_t (BSM1 definition)
-            J_down = vs[lower] * X[lower]
             if X[lower] <= X_t:
-                Jg[j] = J_down
+                Jg[j] = vs[upper] * X[upper]
             else:
-                Jg[j] = min(J_down, vs[upper] * X[upper])
+                Jg[j] = min(vs[lower] * X[lower], vs[upper] * X[upper])
         else:
             # Thickening: limiting settling flux (min supply/capacity)
-            Jg[j] = min(vs[upper] * X[upper], vs[lower] * X[lower])
+            Jg[j] = min(vs[lower] * X[lower], vs[upper] * X[upper])
 
     # --- Layer-wise mass balances (bulk advection + gravitational flux divergence) ---
     V_layer = A * h
@@ -107,8 +108,8 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
         # Upward bulk advection (clarification side)
         if i == 0:
             # Top layer: only inflow from below by upflow; outflow via J_clar (not v_up*X_top)
-            if N_layers > 1:
-                mass_in += A_vup * X[1]
+            mass_in += A_vup * X[i + 1]
+            mass_out += A_vup * X[i]
         elif i < feed_layer:
             # Clarification zone (interior): v_up*(X_{i+1} - X_i)
             mass_in  += A_vup * X[i + 1]

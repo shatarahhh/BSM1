@@ -81,6 +81,7 @@ def calculate_process_rates(state, Kin_params):
     # Process 8: Hydrolysis of entrapped organic nitrogen
     # This process is biochemically linked to Process 7. It breaks down particulate organic nitrogen (X_ND).
     # The rate is derived from the hydrolysis of organics.
-    rho_8 = rho_7 * (X_ND / X_S)
+    
+    rho_8 = k_h * (X_ND / (K_X * X_H + X_S)) * term_hydrolysis_switch * X_H 
 
     return [rho_1, rho_2, rho_3, rho_4, rho_5, rho_6, rho_7, rho_8]
