@@ -36,15 +36,17 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     f_P = stoich_params['f_P']
     i_XB = stoich_params['i_XB']
     i_XP = stoich_params['i_XP']
+
     stoichiometric_matrix = np.array([
-        [0, -1/Y_H, 0, 0, 1, 0, 0, -(1-Y_H)/Y_H, 0, -i_XB, 0, 0, -i_XB/14],
-        [0, -1/Y_H, 0, 0, 1, 0, 0, 0, -((1-Y_H)/(2.86*Y_H)), -i_XB, 0, 0, ((1-Y_H)/(2.86*Y_H))/14],
-        [0, 0, 0, 1-f_P, -1, 0, f_P, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 1, 0, -(4.57-Y_A)/Y_A, 1/Y_A, -1/Y_A - i_XB, 0, 0, -i_XB/14 - 1/(7*Y_A)],
-        [0, 0, 0, 1-f_P, 0, -1, f_P, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, -1, 0, 1/14],
-        [0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, -1, 0],
+        # S_I,   S_S,      X_I,    X_S,        X_H,  X_A,  X_P,    S_O,                     S_NO,                      S_NH,                 S_ND,                 X_ND,                               S_ALK
+        [0,    -1/Y_H,     0,      0,          1,    0,    0,   -(1-Y_H)/Y_H,               0,                        -i_XB,                 0,                    0,                                  -i_XB/14],  # ρ1
+        [0,    -1/Y_H,     0,      0,          1,    0,    0,    0,                        -((1-Y_H)/(2.86*Y_H)),    -i_XB,                 0,                    0,       ((1-Y_H)/(2.86*Y_H))/14 - i_XB/14],  # ρ2   (fixed)
+        [0,       0,       0,    1-f_P,       -1,    0,   f_P,   0,                         0,                         0,                    0,      i_XB - f_P*i_XP,                         0],  # ρ3   (fixed)
+        [0,       0,       0,      0,          0,    1,    0,   -(4.57-Y_A)/Y_A,            1/Y_A,             -1/Y_A - i_XB,              0,                    0,                 -i_XB/14 - 1/(7*Y_A)],  # ρ4
+        [0,       0,       0,    1-f_P,        0,   -1,   f_P,   0,                         0,                         0,                    0,      i_XB - f_P*i_XP,                         0],  # ρ5   (fixed)
+        [0,       0,       0,      0,          0,    0,    0,   0,                          0,                         1,                   -1,                    0,                                 1/14],  # ρ6
+        [0,       1,       0,     -1,          0,    0,    0,   0,                          0,                         0,                    0,                    0,                                  0],  # ρ7
+        [0,       0,       0,      0,          0,    0,    0,   0,                          0,                         0,                    1,                   -1,                                  0],  # ρ8
     ]).T
 
     # --- 3) Influent & flows ---
@@ -90,7 +92,7 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
         ))
 
         rhos = np.array(calculate_process_rates(state_dict, Kin_params))
-        r_C  = stoichiometric_matrix.dot(rhos)
+        r_C  = stoichiometric_matrix.dot(rhos) # type: ignore
 
         if i == 0:
             flow_in  = (influent_flow * influent_concs) + \

@@ -88,11 +88,11 @@ def create_influent_data_function(file_path):
     # 'bounds_error=False' prevents errors if the solver asks for a time outside the data range.
     # Create an interpolation function for flow rate
     flow_interpolator = interp1d(time_points, flow_rate_values, kind='linear',
-                                 bounds_error=False, fill_value=(flow_rate_values[0], flow_rate_values[-1]))
+                                 bounds_error=False, fill_value=(flow_rate_values[0], flow_rate_values[-1])) # type: ignore
     
     # Create an interpolation function for the 13 concentrations
     conc_interpolator = interp1d(time_points, concentration_values, kind='linear', axis=0,
-                                 bounds_error=False, fill_value=(concentration_values[0], concentration_values[-1]))
+                                 bounds_error=False, fill_value=(concentration_values[0], concentration_values[-1])) # type: ignore
 
     def influent_data_function(t):
         return flow_interpolator(t), conc_interpolator(t)
@@ -114,8 +114,15 @@ def get_clarifier_params():
 def get_settling_params():
     """Returns a dictionary of the Takács clarifier parameters."""
     return {
-        'v0_vesilind':  474.0,   # Max Vesilind settling velocity (m/day)
+        'velocity_model': 'vesilind', # 'takacs' or 'vesilind'
+        # 'velocity_model': 'takacs', # 'takacs' or 'vesilind'
+        'v0':  474.0,   # Max Vesilind settling velocity (m/day)
         'Kv':           5.76e-4, # hindered settling parameter rₕ (m^3/g)
+        # Takács double-exponential extra parameters
+        'v0p': 250.0,   # m/d
+        'r_h': 5.76e-4, # m^3/g
+        'r_p': 2.86e-3, # m^3/g
+        'f_ns': 2.28e-3 # -
     }
 
 def tss_from_cod(x13):
@@ -181,10 +188,15 @@ if __name__ == '__main__':
 
     # --- 4. Run the Simulation ---
     print("Starting plant-wide simulation... (this may take a moment)")
-    solution = odeint(bsm1_plant_model, y0, t_span, 
-                      args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params))
+    # solution = odeint(bsm1_plant_model, y0, t_span, 
+    #                   args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params))
 
-    # print("solution.shape:", solution.shape)
+    solution, info = odeint(
+        bsm1_plant_model, y0, t_span,
+        args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params),
+        rtol=1e-5, atol=1e-7, full_output=True
+    )
+    print(info['message']); print('nfe:', info['nfe'], 'nje:', info['nje'], 'nst:', info['nst'])
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
     # print("results_reactors.shape:", results_reactors.shape)
@@ -242,74 +254,3 @@ if __name__ == '__main__':
     # Example 95th percentile required by BSM1:
     TSSe95 = np.percentile(TSS_eff_from_cod, 95)
     print("TSSe95 =", TSSe95)
-
-
-    # print("Simulation finished successfully!")
-    # # --- 5. Process and Plot Results ---
-    # # Reshape the solution back into a 3D matrix: (time, tank, component)
-    # # Reshape reactor results: (time, tank, component)
-    # results_reactors = solution[:, 0:65].reshape(len(t_span), 5, 13)
-    # # Get clarifier results: (time, layer)
-    # results_clarifier = solution[:, 65:75]
-
-    # # Define the names of the components for plot titles and filenames
-    # component_names = ['S_I', 'S_S', 'X_I', 'X_S', 'X_H', 'X_A', 'X_P',
-    #                 'S_O', 'S_NO', 'S_NH', 'S_ND', 'X_ND', 'S_ALK']
-
-    # # Create a directory for results if it doesn't exist
-    # if not os.path.exists('results'):
-    #     os.makedirs('results')
-    
-    # print("\nGenerating and saving reactor plots...")
-
-    # for i in range(13):
-    #     plt.figure(figsize=(12, 6))
-    #     plt.plot(t_span, results_reactors[:, 4, i], label=f'{component_names[i]} in Effluent (Tank 5)')
-    #     plt.title(f'Bioreactor Effluent: {component_names[i]} Concentration')
-    #     plt.xlabel('Time (days)'); plt.ylabel(f'Concentration (g/m^3)')
-    #     plt.legend(); plt.grid(True)
-    #     plt.savefig(f'results/reactor_{component_names[i]}.png')
-    #     plt.close()
-    
-    # print("Generating and saving clarifier plots...")
-    
-    # # Plot Effluent and Underflow TSS from clarifier
-    # effluent_TSS = results_clarifier[:, 0]
-    # underflow_TSS = results_clarifier[:, -1]
-    
-    # plt.figure(figsize=(12, 6))
-    # plt.plot(t_span, effluent_TSS, label='Effluent TSS (Top Layer)')
-    # plt.plot(t_span, underflow_TSS, label='Underflow TSS (Bottom Layer)')
-    # plt.title('Clarifier Performance: Total Suspended Solids (TSS)')
-    # plt.xlabel('Time (days)'); plt.ylabel('TSS Concentration (g/m^3)')
-    # plt.legend(); plt.grid(True); plt.yscale('log')
-    # plt.savefig('results/clarifier_TSS.png')
-    # plt.close()
-
-    # print("\nAll plots have been saved to the 'results' folder.")
-
-'''
-    # Loop through each of the 13 components
-    for i in range(13):
-        # Extract the data for the current component from the final tank (index 4)
-        component_effluent = results[:, 4, i]
-        # Get the name of the component for labeling
-        current_component_name = component_names[i]
-        # Create a new figure for each plot
-        plt.figure(figsize=(12, 6))
-        # Plot the data
-        plt.plot(t_span, component_effluent, label=f'{current_component_name} in Effluent (Tank 5)')
-        # Add titles and labels
-        plt.title(f'BSM1 Simulation: {current_component_name} Concentration')
-        plt.xlabel('Time (days)')
-        plt.ylabel(f'{current_component_name} Concentration (g/m^3)')
-        plt.legend()
-        plt.grid(True)
-        # Save the plot to a unique file
-        file_name = f'results_{current_component_name}.png'
-        plt.savefig(file_name)
-        # Close the figure to free up memory
-        plt.close()s
-
-    print("All plots have been saved successfully.")
-'''
