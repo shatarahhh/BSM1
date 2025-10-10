@@ -108,7 +108,7 @@ def get_clarifier_params():
         'h': 0.4,           # Height of each layer (m) -> Total height = 4m
         'Q_RAS': 18446,     # Underflow rate (m^3/day)
         'Q_w': 385,            # wastage
-        'feed_layer': 4,    # Feed enters the 5th layer (0-indexed)
+        'feed_layer': 4,    # Feed enters the 5th layer (0-indexed, 0 = TOP)
         'X_t': 3000.0          # clarification threshold
     }
 
@@ -205,38 +205,40 @@ if __name__ == '__main__':
 
     # --- 3. Define Simulation Time ---
     # Simulate for 14 days, with output every 0.1 days.
-    t_span = np.arange(0, 14, 0.1)
+    dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
+    # dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
+    t_span = np.arange(0.0, 14.0 + dt, dt) 
     # t_span = np.arange(0, 1, 10)
 
     # --- 4. Run the Simulation ---
     print("Starting plant-wide simulation... (this may take a moment)")
-    # solution = odeint(bsm1_plant_model, y0, t_span, 
-    #                   args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params))
 
-    # solution, info = odeint(
-    #     bsm1_plant_model, y0, t_span,
-    #     args=(get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params),
-    #     rtol=1e-5, atol=1e-7, full_output=True
-    # )
-    # print(info['message']); print('nfe:', info['nfe'], 'nje:', info['nje'], 'nst:', info['nst'])
-    
     def rhs(t, y):
         return bsm1_plant_model(y, t, get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params)
 
-    sol = solve_ivp(
-        rhs,
-        t_span=(float(t_span[0]), float(t_span[-1])),
-        y0=y0,
-        t_eval=t_span,
-        method='BDF',              # or 'LSODA'
-        rtol=1e-5,
-        atol=1e-7,
-        max_step=0.05              # days (~72 min); keeps steps reasonable vs. 15 min KPIs
-    )
-    if not sol.success:
-        print("Integrator reported:", sol.message)
+    # --- implicit ---   
+    # sol = solve_ivp(
+    #     rhs,
+    #     t_span=(float(t_span[0]), float(t_span[-1])),
+    #     y0=y0,
+    #     t_eval=t_span,
+    #     method='BDF',              # or 'LSODA'
+    #     rtol=1e-5,
+    #     atol=1e-7,
+    #     max_step=dt              # 15 min KPIs. 
+    # )
+    # if not sol.success:
+    #     print("Integrator reported:", sol.message)
+    # solution = sol.y.T
 
-    solution = sol.y.T
+    # --- Forward (Explicit) Euler on the fixed grid t_span ---
+    solution = np.empty((t_span.size, y0.size), dtype=float)
+    solution[0, :] = y0
+    for k in range(t_span.size - 1):
+        t  = float(t_span[k])
+        dt = float(t_span[k+1] - t_span[k])
+        dydt = rhs(t, solution[k, :])
+        solution[k+1, :] = solution[k, :] + dt * dydt
 
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
@@ -273,15 +275,63 @@ if __name__ == '__main__':
         Q0_t, _    = get_influent_data(tt)
         Qe_ts[i]   = float(Q0_t) - float(clarifier_params['Q_w'])
 
-    # Plot effluent components (13 figures)
+        # After you’ve built Qe_ts and effluent_ts (shape: T x 13)
+        # w = Qe_ts * dt
+        # avg = (w * effluent_ts[:, j]).sum() / w.sum()
+
+    os.makedirs('results/across_units', exist_ok=True)
+
     component_names = ['S_I','S_S','X_I','X_S','X_H','X_A','X_P','S_O','S_NO','S_NH','S_ND','X_ND','S_ALK']
-    for i in range(13):
-        plt.figure(figsize=(12,6))
-        plt.plot(t_span, effluent_ts[:, i], label=f'{component_names[i]} in Plant Effluent')
-        plt.title(f'Plant Effluent: {component_names[i]}')
-        plt.xlabel('Time (days)'); plt.ylabel('Concentration (g/m^3)')
-        plt.legend(); plt.grid(True)
-        plt.savefig(f'results/effluent_{component_names[i]}.png'); plt.close()
+
+    # Build influent concentration time series for plotting (13 columns)
+    influent_concs_ts = np.vstack([get_influent_data(tt)[1] for tt in t_span])  # shape (T, 13)
+
+    # Decide per soluble whether RAS differs from Tank 5 (i.e., solubles actually go down)
+    # Always show RAS for particulates; conditionally for solubles.
+    particulate_idx_full = [2, 3, 4, 5, 6, 11]  # X_I, X_S, X_H, X_A, X_P, X_ND
+    RAS_PLOT_TOL = 1e-8
+    solubles_go_down_by_comp = {
+        j: (np.max(np.abs(ras_ts[:, j] - results_reactors[:, 4, j])) > RAS_PLOT_TOL)
+        for j in soluble_idx
+    }
+
+    for comp_idx, comp_name in enumerate(component_names):
+        fig, axes = plt.subplots(8, 1, figsize=(12, 18), sharex=True)
+
+        # 1) Influent
+        axes[0].plot(t_span, influent_concs_ts[:, comp_idx])
+        axes[0].set_title(f'Influent → {comp_name}')
+
+        # 2–6) After Tanks 1–5 (CSTR: tank conc. = tank effluent)
+        for tank in range(5):
+            axes[tank + 1].plot(t_span, results_reactors[:, tank, comp_idx])
+            axes[tank + 1].set_title(f'After Tank {tank + 1} → {comp_name}')
+
+        # 7) Clarifier Effluent
+        axes[6].plot(t_span, effluent_ts[:, comp_idx])
+        axes[6].set_title(f'Clarifier Effluent → {comp_name}')
+
+        # 8) Clarifier RAS
+        show_ras = (comp_idx in particulate_idx_full) or solubles_go_down_by_comp.get(comp_idx, False)
+        axes[7].set_title(f'Clarifier RAS → {comp_name}')
+        if show_ras:
+            axes[7].plot(t_span, ras_ts[:, comp_idx])
+        else:
+            # If solubles don't go down, avoid plotting a misleading line
+            axes[7].text(0.5, 0.5, 'RAS not plotted (no soluble transport detected)',
+                        ha='center', va='center', transform=axes[7].transAxes)
+
+        # Cosmetics
+        for ax in axes:
+            ax.grid(True)
+            ax.set_ylabel('g/m³')
+        axes[-1].set_xlabel('Time (days)')
+
+        fig.suptitle(f'{comp_name}: Influent → Tanks 1–5 → Effluent → RAS', y=0.995)
+        plt.tight_layout()
+        plt.savefig(f'results/across_units/{comp_name}_across_units.png', dpi=150)
+        plt.close()
+
 
     # Clarifier TSS figure (use Xe, Xu)
     plt.figure(figsize=(12,6))

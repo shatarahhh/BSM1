@@ -107,7 +107,7 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
 
         # Upward bulk advection (clarification side)
         if i == 0:
-            # Top layer: only inflow from below by upflow; outflow via J_clar (not v_up*X_top)
+            # Top layer: inflow from layer 1 via upflow; outflow to effluent via upflow (A*v_up*X[0]);
             mass_in += A_vup * X[i + 1]
             mass_out += A_vup * X[i]
         elif i < feed_layer:
@@ -155,7 +155,7 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
 def takacs_clarifier_soluble_odes(Z_layers, Z_in, Q_in, clarifier_params):
     """
     Soluble advection in the 10-layer clarifier per BSM1 (no reactions).
-    Layer ordering follows your convention: index 0 = TOP, index 9 = BOTTOM.
+    Layer ordering is TOP -> BOTTOM: index 0 = TOP, index 9 = BOTTOM.
 
     Args:
         Z_layers : (N_layers, n_sol) or flat (N_layers*n_sol,)

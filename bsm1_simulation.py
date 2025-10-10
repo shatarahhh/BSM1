@@ -29,13 +29,13 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     # --- 1) Unpack state vector ---
     y_reactors   = y[0:65]
     X_reactors   = y_reactors.reshape(5, 13)     # 5 tanks x 13 ASM1 states
-    y_clarifier  = y[65:75]                      # 10-layer MLSS profile (bottom->top or your chosen convention)
+    y_clarifier  = y[65:75]                      # 10-layer MLSS profile (top->bottom or your chosen convention)
 
     # 10 layers × 7 solubles, flat after the 10 MLSS states
     N_layers     = clarifier_params['N_layers']  # 10
     n_sol        = len(soluble_idx)              # 7
     y_solubles   = y[75:75 + N_layers * n_sol]   # flat soluble layers
-    Z_layers     = y_solubles.reshape(N_layers, n_sol)  # (10,7), top->bottom
+    Z_layers     = y_solubles.reshape(N_layers, n_sol)  # (10,7), top->bottom 
 
     # --- 2) Stoichiometry (unchanged) ---
     Y_A = stoich_params['Y_A']
@@ -69,7 +69,7 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
 
     # --- 4) Clarifier feed & MLSS  ---
     # MLSS entering clarifier = 0.75 * (sum of particulate COD in Tank 5)
-    total_particulate_cod_t5 = float(np.sum(X_reactors[4, particulate_cod_idx]))
+    total_particulate_cod_t5 = np.sum(X_reactors[4, particulate_cod_idx])
     MLSS_in_clarifier = 0.75 * total_particulate_cod_t5
 
     # Clarifier feed flow (BSM1): Qf = Q5 - Qa = Q0 + Qr
