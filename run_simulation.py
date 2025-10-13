@@ -271,21 +271,21 @@ if __name__ == '__main__':
 
 
     # --- implicit ---   
-    dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
-    t_span = np.arange(0.0, 14.0 + dt, dt) 
-    sol = solve_ivp(
-        rhs,
-        t_span=(float(t_span[0]), float(t_span[-1])),
-        y0=y0,
-        t_eval=t_span,
-        method='BDF',              # or 'LSODA'
-        rtol=1e-5,
-        atol=1e-7,
-        max_step=dt              # 15 min KPIs. 
-    )
-    if not sol.success:
-        print("Integrator reported:", sol.message)
-    solution = sol.y.T
+    # dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
+    # t_span = np.arange(0.0, 14.0 + dt, dt) 
+    # sol = solve_ivp(
+    #     rhs,
+    #     t_span=(float(t_span[0]), float(t_span[-1])),
+    #     y0=y0,
+    #     t_eval=t_span,
+    #     method='BDF',              # or 'LSODA'
+    #     rtol=1e-5,
+    #     atol=1e-7,
+    #     max_step=dt              # 15 min KPIs. 
+    # )
+    # if not sol.success:
+    #     print("Integrator reported:", sol.message)
+    # solution = sol.y.T
 
     # --- Forward (Explicit) Euler on the fixed grid t_span ---
     dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 

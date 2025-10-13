@@ -197,8 +197,7 @@ def mask_irregular_polygon(coordinates, H2, H3, H4, H5, Y2, Y4, Theta1, ymax):
     return mask
 
 
-def calculate_concentrations(u_data, 
-                            y_data_coordinates):
+def calculate_concentrations(u_data):
     """
     Main function to calculate ESS and RAS average concentrations.
     
@@ -255,17 +254,18 @@ def calculate_concentrations(u_data,
     # ESS cells: (81,52) and (81,53)
     ess_cells = [(81, 52), (81, 53)]
     ess_values = np.array([idx_to_val[c] for c in ess_cells])
-    ess_avg = np.mean(ess_values)
+    ess_values_positive = np.maximum(0.0, ess_values)
+    ess_avg = np.mean(ess_values_positive)
     
     # RAS cells: (1,1) to (40,1)
     ras_cells = [(i, 1) for i in range(1, 41)]
     ras_values = np.array([idx_to_val[c] for c in ras_cells])
-    ras_avg = np.mean(ras_values)
+    ras_values_positive = np.maximum(0.0, ras_values)  
+    ras_avg = np.mean(ras_values_positive)
     
     # Store data for plotting
     prediction_data = {
         'u_data': u_data,
-        'y_data_coordinates': y_data_coordinates,
         'prediction_unnorm': prediction_unnorm,
         'y_data_indices': y_data_indices,
         'ess_values': ess_values,
@@ -389,8 +389,21 @@ def print_results(ess_avg, ras_avg, prediction_data):
     print(f"{'='*60}\n")
 
 
-if __name__ == '__main__':
- 
+def run_prediction_pipeline(plot=False):
+    """
+    Runs the full pipeline:
+    - (Optionally) load branch loading and coordinates (kept as comments per original)
+    - Build u_data2 from given scalars
+    - Update and run blockMesh
+    - Extract trunk spatial coordinates
+    - Calculate concentrations
+    - Print results
+    - (Optionally) plot contour
+
+    Returns:
+        ess_avg, ras_avg, prediction_data
+    """
+
     # base_dir = '/lustre/isaac24/scratch/mshatara/openfoam/mshatarah-v2306/run/Secondary_Clarifier/1000_cases/Data_extracted/concatenated_cases'
     # num_cases = 703
     # num_points = 3780
@@ -403,27 +416,31 @@ if __name__ == '__main__':
     V0, k = 15.9184, 72.2825
     H1, H2, H3, H4 = 0.3897, 3.906, 3.6538, 21.1599
     Y2, Y3, Y4, Theta1 = 2.4559, 4.3597, 1.1072, 6.1677
+
     u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0, k]).reshape(1, 1, 13)
     print(f"u_data2: {u_data2.shape}")
-
 
     # trunk_coordinates_file = os.path.join(base_dir, f'trunk_coordinates_{num_cases}_cases_{num_points}_points.npz')
     # y_data_coordinates = np.load(trunk_coordinates_file)['trunk_coordinates']
     # y_data_coordinates2 = y_data_coordinates[case_number].reshape(1, -1, 2)
-    update_blockMesh_from_source(H1, H2, H3, H4, Y2, Y3, Y4, Theta1)
-    run_blockmesh_output()
-    y_data_coordinates2 = extract_trunk_spatial_fixed().reshape(1, -1, 2)
-    print(f"Coordinates shape: {y_data_coordinates2.shape}")
-
 
     # Calculate concentrations
-    ess_avg, ras_avg, prediction_data = calculate_concentrations(
-        u_data2, 
-        y_data_coordinates2,
-    )
-    
+    ess_avg, ras_avg, prediction_data = calculate_concentrations(u_data2)
+
     # Print results
     print_results(ess_avg, ras_avg, prediction_data)
-    
+
     # Optional: Plot contour (comment out if not needed)
-    # plot_contour(prediction_data)
+    if plot:
+        update_blockMesh_from_source(H1, H2, H3, H4, Y2, Y3, Y4, Theta1)
+        run_blockmesh_output()
+        y_data_coordinates2 = extract_trunk_spatial_fixed().reshape(1, -1, 2)
+        print(f"Coordinates shape: {y_data_coordinates2.shape}")
+        prediction_data['y_data_coordinates'] = y_data_coordinates2
+        plot_contour(prediction_data)
+
+    return ess_avg, ras_avg
+
+
+# if __name__ == '__main__':
+#     run_prediction_pipeline(plot=False)

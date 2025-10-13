@@ -20,6 +20,23 @@ def map_particulates_by_tss(x_src_13, X_tss_target, MLSS_in_clarifier):
     x_out[all_particulate_idx] = ratio * x_src_13[all_particulate_idx]
     return x_out
 
+def NN_project_to_mass_balance(Xe_hat, Xu_hat, Xf, Qf, Qe, Qu,
+                            w_e=1.0, w_u=0.2, bounds=(0.0, 12000.0)):
+    Xe_hat = float(Xe_hat); Xu_hat = float(Xu_hat)
+    S = Qf * Xf
+    denom = (Qe**2)/w_e + (Qu**2)/w_u
+    if denom <= 0.0:
+        Xe, Xu = Xe_hat, Xu_hat
+    else:
+        lam = (S - Qe*Xe_hat - Qu*Xu_hat) / denom
+        Xe = Xe_hat + lam * (Qe / w_e)
+        Xu = Xu_hat + lam * (Qu / w_u)
+    lo, hi = bounds
+    Xe = float(np.clip(Xe, lo, hi)); Xu = float(np.clip(Xu, lo, hi))
+    if Xu < Xe:  # optional, typical physical guardrail
+        mid = 0.5*(Xe+Xu); Xe, Xu = min(Xe, mid), max(Xu, mid)
+    return Xe, Xu
+
 def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_params, settling_params):
     """
     BSM1 plant dynamics (5 reactors + 10-layer clarifier).
