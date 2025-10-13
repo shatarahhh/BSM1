@@ -1,0 +1,73 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2306                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      epsilon;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -3 0 0 0 0];
+
+// Using ε = Cµ^(3/4) * [ k^(3/2) / (0.07*width ) ]
+// => inlet_radius(may be approximated as 0.2 (inlet slot))
+// we turn the circular shape to rectangular. height = 0.2, width = circumference=2*pi*r, Dhyd= 4*area/wetted_perimeter = 4*(width*height)/(2*(heigh+width)). Dyhd = 0.37 for r =0.2. we could assume dyhd =0.36 for all then
+internalField   uniform 1.5e-06; //#calc "pow(0.09,0.75) * pow(3.75e-05,1.5) / (0.07*0.36)";
+
+boundaryField
+{
+    inlet
+    {
+        type            turbulentMixingLengthDissipationRateInlet;
+        mixingLength    #eval "0.07*(2*0.3*(2*pi()*0.5297)/(0.3+(2*pi()*0.5297)))";       
+        value           uniform 1.5e-06;
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+    hopper_outlet
+    {
+        type            zeroGradient;
+    }
+    Wall
+    {
+        type            epsilonWallFunction;
+        value           $internalField;
+        Cmu             0.09;
+        kappa           0.41;
+        E               9.8;
+    }
+    bottom
+    {
+        type            slip;
+    }
+    
+    top
+    {
+        type            symmetryPlane;
+    }
+    
+    front
+    {
+        type            wedge;
+    }
+    back
+    {
+        type            wedge;
+    }
+    
+}
+/*:
+Paper        for r=0.2  Inlet k: 3.75e-05 leads to pow(0.09,0.75) * pow(3.75e-05,1.5)/(0.07*0.36) = 1.5e-06
+*/
+
+// ************************************************************************* //

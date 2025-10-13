@@ -1,0 +1,15 @@
+#!/bin/bash
+# rm -r [1-9]*
+# rm -r postProcessing
+blockMesh
+# driftFluxFoam 2>&1 | tee logFile
+
+postProcess -func writeCellCentres -time latestTime
+
+# solverExit=${PIPESTATUS[0]}   # 0th element = first command in the pipe
+
+# if [[ $solverExit -eq 0 ]]; then
+#     echo "Solver finished cleanly (code $solverExit)" | tee converged.txt
+# else
+#     echo "Solver crashed or aborted (code $solverExit)" | tee diverged.txt
+# fi

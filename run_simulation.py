@@ -1,17 +1,19 @@
 # run_simulation.py File
 
-import numpy as np
-import pandas as pd
-from scipy.interpolate import interp1d
-from scipy.integrate import odeint
 import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
 import os
+
+from scipy.integrate import odeint, solve_ivp
+from scipy.interpolate import interp1d
+
+from ASM1_Processes import calculate_process_rates
+from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx, soluble_idx
+from bsm1_validation import compute_bsm1_kpis, make_bsm1_validation_plot
+
 os.makedirs('results', exist_ok=True)
 
-from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx, soluble_idx
-from bsm1_validation import compute_bsm1_kpis
-from ASM1_Processes import calculate_process_rates
-from scipy.integrate import solve_ivp
 
 def get_bsm1_params():
     """
@@ -119,12 +121,12 @@ def get_settling_params():
         # 'velocity_model': 'vesilind', # 'takacs' or 'vesilind'
         'velocity_model': 'takacs', # 'takacs' or 'vesilind'
         'v0':  474.0,   # Max Vesilind settling velocity (m/day)
-        'Kv':           5.76e-4, # hindered settling parameter rₕ (m^3/g)
+        'Kv':  5.76e-4, # hindered settling parameter rₕ (m^3/g)
         # Takács double-exponential extra parameters
         'v0p': 250.0,   # m/d
         'r_h': 5.76e-4, # m^3/g
         'r_p': 2.86e-3, # m^3/g
-        'f_ns': 2.28e-3 # -
+        'f_ns': 2.28e-3 # 
     }
 
 def tss_from_cod(x13):
@@ -142,9 +144,7 @@ def stream_compositions_from_state(y):
     y_clarifier = y[65:75]
 
     # soluble layers (10 x 7) follow immediately after MLSS
-    N_layers = 10
-    n_sol    = len(soluble_idx)
-    Z_layers = y[75:75 + N_layers * n_sol].reshape(N_layers, n_sol)
+    Z_layers = y[75:145].reshape(10, 7)
 
     # BSM1 feed TSS used for scaling
     X_tss_feed = tss_from_cod(X5)
@@ -165,6 +165,33 @@ def stream_compositions_from_state(y):
     ras_13[soluble_idx] = Zu_vec
     return eff_13, ras_13, Xe, Xu
 
+def get_stabilization_influent_data():
+    """
+    BSM1 100-day stabilization influent (Table 5).
+    Returns a function f(t)->(Q0, Zin) with constant values.
+    """
+    Q0 = 18446.0  # m^3/d
+    Zin = np.array([
+        30.00,   # S_I
+        69.50,   # S_S
+        51.20,   # X_I
+        202.32,  # X_S
+        28.17,   # X_H
+        0.0,     # X_A
+        0.0,     # X_P
+        0.0,     # S_O
+        0.0,     # S_NO
+        31.56,   # S_NH
+        6.95,    # S_ND
+        10.59,   # X_ND
+        7.00     # S_ALK (mol/m^3)
+    ], dtype=float)
+
+    def influent_data_function(t):
+        return Q0, Zin
+
+    return influent_data_function
+
 # --- Example of how to use it ---
 if __name__ == '__main__':
 
@@ -174,6 +201,9 @@ if __name__ == '__main__':
     settling_params = get_settling_params()
     influent_file = 'influent/Inf_dry_2006.txt'
     get_influent_data = create_influent_data_function(influent_file)
+
+    # constant influent for the 100-day stabilization (Table 5)
+    get_influent_data_stab = get_stabilization_influent_data()
     print("step 1 finished")
 
     # --- 2. Set Initial Conditions ---
@@ -197,12 +227,41 @@ if __name__ == '__main__':
     initial_state_clarifier_solubles = np.tile(init_Z5, (10, 1))  # (10,7), top->bottom
 
     # Combine into a single flat vector for the ODE solver
-    y0 = np.concatenate([
+    y0_init = np.concatenate([
         initial_state_reactors.flatten(),
         initial_state_clarifier,
         initial_state_clarifier_solubles.flatten()
     ])
     print("Step 2: Initial conditions defined for 145 states.")
+
+    # --- 2b. 100-day stabilization under constant influent (no sensor noise in open-loop) ---
+    # Use an implicit stiff integrator here to avoid tiny explicit Euler steps over 100 days.
+    print("Starting 100-day stabilization (constant influent)...")
+
+    def rhs_stab(t, y):
+        return bsm1_plant_model(y, t, get_influent_data_stab, stoich_params, Kin_params, clarifier_params, settling_params)
+
+    # Evaluate every 15 min (matching BSM1 KPI grid; choice of t_eval does not affect the dynamics)
+    t_stab_eval = np.arange(0.0, 100.0 + 1.0/96.0, 1.0/96.0)
+    sol_stab = solve_ivp(
+        rhs_stab,
+        t_span=(float(t_stab_eval[0]), float(t_stab_eval[-1])),
+        y0=y0_init,
+        t_eval=t_stab_eval,
+        method='BDF',
+        rtol=1e-5,
+        atol=1e-7,
+        max_step=1.0/24.0  # <= 1 hour steps; safe for stiff parts
+    )
+    if not sol_stab.success:
+        print("Stabilization integrator reported:", sol_stab.message)
+    y0 = sol_stab.y[:, -1]  # <-- This is now the initial state for the 14-day run
+    np.save('results/y0_after_100day_stabilization.npy', y0)
+    print("Stabilization finished. y0 for dynamic run saved to results/y0_after_100day_stabilization.npy")
+
+    # ---- Table 8 steady-state (open-loop) check. Xu (underflow/RAS solids concentration) ----
+    _, _, _, Xu_ss = stream_compositions_from_state(y0) # unpack only last
+    print(f"Xu (underflow TSS) = {Xu_ss:.2f} g SS/m^3, Table 8 steady-state ≈ 6394 g SS/m^3")
 
     # --- 3. Run the Simulation ---
     print("Starting plant-wide simulation... (this may take a moment)")
@@ -210,9 +269,10 @@ if __name__ == '__main__':
     def rhs(t, y):
         return bsm1_plant_model(y, t, get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params)
 
+
+    # --- implicit ---   
     dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
     t_span = np.arange(0.0, 14.0 + dt, dt) 
-    # --- implicit ---   
     sol = solve_ivp(
         rhs,
         t_span=(float(t_span[0]), float(t_span[-1])),
@@ -228,15 +288,15 @@ if __name__ == '__main__':
     solution = sol.y.T
 
     # --- Forward (Explicit) Euler on the fixed grid t_span ---
-    # dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
-    # t_span = np.arange(0.0, 14.0 + dt, dt) 
-    # solution = np.empty((t_span.size, y0.size), dtype=float)
-    # solution[0, :] = y0
-    # for k in range(t_span.size - 1):
-    #     t  = float(t_span[k])
-    #     dt = float(t_span[k+1] - t_span[k])
-    #     dydt = rhs(t, solution[k, :])
-    #     solution[k+1, :] = solution[k, :] + dt * dydt
+    dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
+    t_span = np.arange(0.0, 14.0 + dt, dt) 
+    solution = np.empty((t_span.size, y0.size), dtype=float)
+    solution[0, :] = y0
+    for k in range(t_span.size - 1):
+        t  = float(t_span[k])
+        dt = float(t_span[k+1] - t_span[k])
+        dydt = rhs(t, solution[k, :])
+        solution[k+1, :] = solution[k, :] + dt * dydt
 
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
@@ -342,3 +402,6 @@ if __name__ == '__main__':
     # Example 95th percentile required by BSM1:
     TSSe95 = np.percentile(TSS_eff_from_cod, 95)
     print("TSSe95 =", TSSe95)
+
+    # make the validation figure + CSV
+    make_bsm1_validation_plot(kpis, TSSe95)

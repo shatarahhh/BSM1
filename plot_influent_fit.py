@@ -21,7 +21,7 @@ def make_model(x, y, kind="linear", smooth=None):
         f = interp1d(
             x, y, kind=kind,
             bounds_error=False,
-            fill_value=(y[0], y[-1])
+            fill_value=(y[0], y[-1]) # type: ignore
         )
         return lambda t: np.asarray(f(t), dtype=float), f"{kind}"
     else:
@@ -31,8 +31,8 @@ def make_model(x, y, kind="linear", smooth=None):
 def r2_score(y_true, y_pred):
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
-    ss_res = np.sum((y_true - y_pred)**2)
-    ss_tot = np.sum((y_true - np.mean(y_true))**2)
+    ss_res = np.sum((y_true - y_pred)**2) # type: ignore
+    ss_tot = np.sum((y_true - np.mean(y_true))**2) # type: ignore
     return np.nan if ss_tot == 0 else (1.0 - ss_res/ss_tot)
 
 def main():
@@ -72,7 +72,7 @@ def main():
     print(f"R² at sample points for {args.component} using {model_tag}: {r2:.6f}")
 
     # Dense curve
-    x_fine = np.linspace(x.min(), x.max(), args.n_fine)
+    x_fine = np.linspace(x.min(), x.max(), args.n_fine) # type: ignore
     y_fine = f(x_fine)
 
     # Filenames
@@ -82,7 +82,7 @@ def main():
 
     # Fit plot
     plt.figure(figsize=(12, 6))
-    plt.scatter(x, y, s=18, alpha=0.8, label="Discrete samples")
+    plt.scatter(x, y, s=18, alpha=0.8, label="Discrete samples") # type: ignore
     plt.plot(x_fine, y_fine, lw=2.0, label=f"Continuous model ({model_tag})")
     plt.title(f"{args.component}: samples vs continuous model | R²={r2:.5f}")
     plt.xlabel("Time (days)")
@@ -94,10 +94,10 @@ def main():
     plt.close()
 
     # Residuals plot
-    residuals = y - y_hat_samples
+    residuals = y - y_hat_samples # type: ignore
     plt.figure(figsize=(12, 3.5))
     plt.axhline(0, lw=1)
-    plt.scatter(x, residuals, s=14, alpha=0.8)
+    plt.scatter(x, residuals, s=14, alpha=0.8) # type: ignore
     plt.title("Residuals (observed − model) at sample times")
     plt.xlabel("Time (days)")
     plt.ylabel("Residual")

@@ -1,0 +1,52 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2312                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       dictionary;
+    location    "13122.1/uniform/functionObjects";
+    object      functionObjectProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+steadyStop
+{
+    sludgeSteady
+    {
+        volAverage(alpha.sludge)
+        {
+            windowTimes     21 ( 97.85590000000001 93.1961 88.5363 83.87649999999999 79.2167 74.5569 69.89709999999999 65.2373 60.5775 55.9177 51.2579 46.5981 41.9383 37.2785 32.6187 27.9589 23.2991 18.6393 13.9795 9.319660000000001 4.65983 );
+            windowValues    21 ( 3.67492e-05 3.67494e-05 3.67495e-05 3.67496e-05 3.67497e-05 3.67498e-05 3.67499e-05 3.675e-05 3.67501e-05 3.67502e-05 3.67503e-05 3.67504e-05 3.67505e-05 3.67506e-05 3.67507e-05 3.67508e-05 3.67509e-05 3.6751e-05 3.67511e-05 3.67512e-05 3.67513e-05 );
+            totalTime       13122.08760484644;
+        }
+        iter            2837;
+    }
+}
+
+cdf7e925f5746741c316f5fbcf39ad0dfca90775
+{
+    sludgeVolAve
+    {
+        scalar
+        {
+            volAverage(alpha.sludge) 3.675129058974683e-05;
+        }
+    }
+    steadyStop
+    {
+        scalar
+        {
+            volAverage(alpha.sludge)Mean 3.675029479112873e-05;
+        }
+    }
+}
+
+
+// ************************************************************************* //

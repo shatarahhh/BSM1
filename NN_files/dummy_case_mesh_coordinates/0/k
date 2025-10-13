@@ -1,0 +1,65 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2306                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      k;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 3.75e-05;
+
+boundaryField
+{
+    inlet
+    {
+        type       turbulentIntensityKineticEnergyInlet;
+        intensity  0.05; // Turbulence Intensity,I (5% of the mean velocity)
+        value      uniform 3.75e-05; // DUMMY #calc "3/2*pow(0.1,2)*pow(0.05,2)"
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+    hopper_outlet
+    {
+        type            zeroGradient;
+    }
+    Wall
+    {
+        type            kqRWallFunction;
+        value           $internalField;
+    }
+    bottom
+    {
+        type            slip;
+    }
+    top
+    {
+        type            symmetryPlane;
+    }
+    front
+    {
+        type            wedge;
+    }
+    back
+    {
+        type            wedge;
+    }
+}
+/*:
+
+Paper         Inlet: 0.1006692041 leads to "3/2*pow(0.1,2)*pow(0.05,2)" = 3.75e-05
+*/
+
+// ************************************************************************* //

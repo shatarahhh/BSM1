@@ -1,0 +1,228 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2306                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     driftFluxFoam;
+
+startFrom       startTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         70000;
+
+deltaT          0.1;
+
+writeControl    adjustable;
+
+writeInterval   5000;
+
+purgeWrite      2;
+
+writeFormat     ascii;
+
+writePrecision  6;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   6;
+
+runTimeModifiable yes;
+
+adjustTimeStep  on;
+
+maxCo           10;
+
+// maxDeltaT       1;
+
+
+functions
+{
+    sludgeVolAve
+    {
+        type            volFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        regionType      all;                // whole domain
+        operation       volAverage;         // volume–weighted average
+        fields          (alpha.sludge);     // field to monitor
+
+        // run-time controls
+        writeControl    timeStep;
+        writeInterval   1;                  // evaluate every Δt
+        log             true;               // print to log
+        writeFields     false;              // no extra field files
+    }
+
+    
+    steadyStop
+    {
+        type            runTimeControl;
+        libs            ("libutilityFunctionObjects.so");
+        nWriteStep      2;            // keep 2 final writes
+
+        conditions
+        {
+            sludgeSteady
+            {
+                type            average;
+                functionObject  sludgeVolAve;               // volume-average defined earlier
+                fields          (volAverage(alpha.sludge));   // ← corrected
+                tolerance       1e-9;                       // Δαsludge ≤ 1×10-3
+                windowType      exact;                      // compare first vs last value
+                window          100;                        // over 100 consecutive steps
+            }
+        }
+
+        satisfiedAction  end;        // stop the run when condition is met
+    }
+    
+    
+    /*outletv
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name outlet; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (U); // magU or U
+    }
+    topv
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name top; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (U); // magU or U
+    }
+    bottomv
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name bottom; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (U); // magU or U
+    }
+    
+    outletp
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name outlet; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (p_rgh); // magU or U
+    }
+    topp
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name top; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (p_rgh); // magU or U
+    }
+    bottomp
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name bottom; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (p_rgh); // magU or U
+    }
+    
+    outletsludge
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name outlet; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (alpha.sludge); // magU or U
+    }
+    wallsludge
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name wall; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (alpha.sludge); // magU or U
+    }   
+    bottomsludge
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name bottom; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (alpha.sludge); // magU or U
+    }    
+    hopperoutletsludge
+    {
+        type surfaceFieldValue; // Function object type
+        libs ("libfieldFunctionObjects.so"); // Required library
+        writeControl timeStep; // Output at every time step
+        writeFields false; // true or false
+        surfaceFormat raw; // Specify the format (e.g., raw, vtk, ensight
+        log true; // Log results to the log file
+        regionType patch; // Specify the region type
+        name bottom; // Replace with the actual outlet boundary name
+        operation areaAverage; // Compute area-averaged value
+        fields (alpha.sludge); // magU or U
+    } */   
+}
+// ************************************************************************* //

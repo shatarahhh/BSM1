@@ -1,0 +1,72 @@
+U
+{
+expr "areaAverage\(outlet\) of U = \((%f%) (%f%) (%f%)\)";
+theTitle "U_outlet";
+titles ("Ux_outlet" "Uy_outlet" "Uz_outlet");
+type regular;
+}
+U_top
+{
+    expr "areaAverage\(top\) of U = \((%f%) (%f%) (%f%)\)";
+    type slave;
+    master "U";
+    titles ( "Ux_top" "Uy_top" "Uz_top" );
+}
+U_bottom
+{
+    expr "areaAverage\(bottom\) of U = \((%f%) (%f%) (%f%)\)";
+    type slave;
+    master U;
+    titles ( "Ux_bottom" "Uy_bottom" "Uz_bottom" );
+}
+
+p_rgh
+{
+expr "areaAverage\(outlet\) of p_rgh = (%f%)";
+theTitle "p_rgh_outlet";
+titles ("p_rgh_outlet");
+type regular;
+}
+p_rgh_top
+{
+expr "areaAverage\(top\) of p_rgh = (%f%)";
+type slave;
+master p_rgh;
+titles ("p_rgh_top");
+} 
+p_rgh_bottom
+{
+expr "areaAverage\(bottom\) of p_rgh = (%f%)";
+type slave;
+master p_rgh;
+titles ("p_rgh_bottom");
+} 
+ 
+alpha.sludge
+{
+expr "areaAverage\(outlet\) of alpha.sludge = (%f%)";
+theTitle "alpha.sludge_outlet";
+titles ("sludge_outlet");
+type regular;
+}
+alpha.sludge_wall
+{
+expr "areaAverage\(wall\) of alpha.sludge = (%f%)";
+type slave;
+master alpha.sludge;
+titles ("sludge_wall");
+} 
+alpha.sludge_bottom
+{
+expr "areaAverage\(bottom\) of alpha.sludge = (%f%)";
+type slave;
+master alpha.sludge;
+titles ("sludge_bottom");
+} 
+alpha.sludge_hopperoutlet
+{
+expr "areaAverage\(hopper_outlet\) of alpha.sludge = (%f%)";
+type slave;
+master alpha.sludge;
+titles ("sludge_hopperoutlet");
+} 

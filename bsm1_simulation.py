@@ -32,10 +32,8 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     y_clarifier  = y[65:75]                      # 10-layer MLSS profile (top->bottom or your chosen convention)
 
     # 10 layers × 7 solubles, flat after the 10 MLSS states
-    N_layers     = clarifier_params['N_layers']  # 10
-    n_sol        = len(soluble_idx)              # 7
-    y_solubles   = y[75:75 + N_layers * n_sol]   # flat soluble layers
-    Z_layers     = y_solubles.reshape(N_layers, n_sol)  # (10,7), top->bottom 
+    y_solubles   = y[75: 145]   # flat soluble layers
+    Z_layers     = y_solubles.reshape(10, 7)  # (10,7), top->bottom 
 
     # --- 2) Stoichiometry (unchanged) ---
     Y_A = stoich_params['Y_A']

@@ -30,7 +30,7 @@ def takacs_settling_velocity(X, settling_params, X_in_total):
     fns = settling_params['f_ns']  # 0.00228 (-)
     X_f = X_in_total   # <-- set this each call from your clarifier feed TSS
 
-    X    = np.maximum(0.0, np.asarray(X, float))
+    X    = np.maximum(0.0, np.asarray(X, float)) # type: ignore
     Xmin = fns * float(X_f)
     Xs   = X - Xmin                  # X* in the docs
 
@@ -102,6 +102,19 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
     dxdt    = np.zeros(N_layers, dtype=float)
 
     for i in range(N_layers):  # i: 0=top, 9=bottom
+
+        # Gravitational flux divergence
+        if i == 0:
+            grav_in  = 0.0
+            grav_out = A * Jg[1]                    # -J_clar,10 in BSM1
+        elif i == N_layers - 1:
+            grav_in  = A * Jg[N_layers - 1]         # +J_s at interface above bottom
+            grav_out = 0.0
+        else:
+            grav_in  = A * Jg[i]                    # from interface (i-1 | i)
+            grav_out = A * Jg[i + 1]                # to interface (i | i+1)
+
+        # bulk advection
         mass_in  = 0.0
         mass_out = 0.0
 
@@ -133,19 +146,10 @@ def takacs_clarifier_model(X_layers, X_in_total, Q_in, clarifier_params, settlin
         if i == feed_layer:
             mass_in += Q_in * X_in_total
 
-        # Gravitational flux divergence
-        if i == 0:
-            grav_in  = 0.0
-            grav_out = A * Jg[1]                    # -J_clar,10 in BSM1
-        elif i == N_layers - 1:
-            grav_in  = A * Jg[N_layers - 1]         # +J_s at interface above bottom
-            grav_out = 0.0
-        else:
-            grav_in  = A * Jg[i]                    # from interface (i-1 | i)
-            grav_out = A * Jg[i + 1]                # to interface (i | i+1)
-
-        net_mass_change = (mass_in + grav_in) - (mass_out + grav_out)
-        dxdt[i] = net_mass_change / V_layer
+        # dm'/dt = (total_mass_in - total_mass_out). This is mass balance
+        net_mass_change = (mass_in + grav_in) - (mass_out + grav_out) 
+        # dX'/dt = (1/V_layer) * dm'/dt
+        dxdt[i] = net_mass_change / V_layer # turn mass rates into concentration rates by dividing by the layer volume
 
     # Outputs
     X_underflow_total = X[-1]   # bottom layer
@@ -165,7 +169,7 @@ def takacs_clarifier_soluble_odes(Z_layers, Z_in, Q_in, clarifier_params):
         clarifier_params : dict with keys 'A','N_layers','h','Q_RAS','Q_w','feed_layer'.
 
     Returns:
-        dZdt_flat : (N_layers*n_sol,) time derivatives (flattened)
+        dzdtdt_flat : (N_layers*n_sol,) time derivatives (flattened)
         Z_underflow : (n_sol,) solubles in underflow = bottom layer
         Z_effluent  : (n_sol,) solubles in effluent  = top layer
     """
@@ -192,21 +196,21 @@ def takacs_clarifier_soluble_odes(Z_layers, Z_in, Q_in, clarifier_params):
 
     Zin = np.asarray(Z_in, dtype=float).reshape(n_sol,)
 
-    dZ = np.zeros_like(Z)
+    dzdt = np.zeros_like(Z)
 
     # Above feed: upflow from i+1 to i (top index = 0)
     for i in range(feed_layer):
-        dZ[i, :] = (v_up / h) * (Z[i + 1, :] - Z[i, :])
+        dzdt[i, :] = (v_up / h) * (Z[i + 1, :] - Z[i, :])
 
     # Feed layer: Q_f/A/h * (Z_in - Z_feed)
-    dZ[feed_layer, :] = (Q_in / (A * h)) * (Zin - Z[feed_layer, :])
+    dzdt[feed_layer, :] = (Q_in / (A * h)) * (Zin - Z[feed_layer, :])
 
     # Below feed: downflow from i-1 to i
     for i in range(feed_layer + 1, N_layers):
-        dZ[i, :] = (v_dn / h) * (Z[i - 1, :] - Z[i, :])
+        dzdt[i, :] = (v_dn / h) * (Z[i - 1, :] - Z[i, :])
 
     # Output top/bottom solubles per BSM1
     Z_effluent  = Z[0, :]       # Ze = layer 0 (top)
     Z_underflow = Z[-1, :]      # Zu = layer 9 (bottom)
 
-    return dZ.reshape(-1), Z_underflow, Z_effluent
+    return dzdt.reshape(-1), Z_underflow, Z_effluent
