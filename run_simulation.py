@@ -11,7 +11,7 @@ from scipy.interpolate import interp1d
 from ASM1_Processes import calculate_process_rates
 from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx, soluble_idx
 from bsm1_validation import compute_bsm1_kpis, make_bsm1_validation_plot
-
+# from NN import run_prediction_pipeline
 os.makedirs('results', exist_ok=True)
 
 
@@ -112,7 +112,10 @@ def get_clarifier_params():
         'Q_RAS': 18446,     # Underflow rate (m^3/day)
         'Q_w': 385,            # wastage
         'feed_layer': 4,    # Feed enters the 5th layer (0-indexed, 0 = TOP)
-        'X_t': 3000.0          # clarification threshold
+        'X_t': 3000.0,          # clarification threshold
+        # 'mode': 'takacs',            # 'takacs' or 'nn_ss'
+        'mode': 'nn_ss',            # 'takacs' or 'nn_ss'
+        'project_balance': False,     # keep steady solids balance exact for NN mode
     }
 
 def get_settling_params():
@@ -121,7 +124,8 @@ def get_settling_params():
         # 'velocity_model': 'vesilind', # 'takacs' or 'vesilind'
         'velocity_model': 'takacs', # 'takacs' or 'vesilind'
         'v0':  474.0,   # Max Vesilind settling velocity (m/day)
-        'Kv':  5.76e-4, # hindered settling parameter rₕ (m^3/g)
+        # 'Kv':  5.76e-4, # hindered settling parameter rₕ (m^3/g)
+        'Kv':  3.18e-4, # dummy ( at the range of my current NN ( k=a*ln(10)/density/1000= 200*ln(10)/1450/1000) until i create  NN that can handle bsm1 value of 5.76e-4. hindered settling parameter rₕ (m^3/g). e^(−kC)=10^(−(a/1450)C). k=a*ln(10)/1450​.
         # Takács double-exponential extra parameters
         'v0p': 250.0,   # m/d
         'r_h': 5.76e-4, # m^3/g
@@ -292,12 +296,24 @@ if __name__ == '__main__':
     t_span = np.arange(0.0, 14.0 + dt, dt) 
     solution = np.empty((t_span.size, y0.size), dtype=float)
     solution[0, :] = y0
+    last_day_printed = 0  
     for k in range(t_span.size - 1):
         t  = float(t_span[k])
         dt = float(t_span[k+1] - t_span[k])
         dydt = rhs(t, solution[k, :])
         solution[k+1, :] = solution[k, :] + dt * dydt
+        if clarifier_params.get('mode') == 'nn_ss':
+            # Put NN values at top/bottom
+            solution[k+1, 65] = clarifier_params.get('last_Xe', solution[k+1, 65])
+            solution[k+1, 74] = clarifier_params.get('last_Xu', solution[k+1, 74])
+            # print(f"intial solution[{k+1}, 66:74]", solution[k+1, 66:74])
+            solution[k+1, 66:74] = 0.0
+            # print(f"zeroing solution[{k+1}, 66:74]", solution[k+1, 66:74])
 
+        d = int(t_span[k+1])          
+        if d > last_day_printed:      
+            last_day_printed = d      
+            print(f"Day {d} complete")
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
     # print("results_reactors.shape:", results_reactors.shape)

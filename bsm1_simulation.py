@@ -3,6 +3,7 @@
 import numpy as np
 from ASM1_Processes import calculate_process_rates
 from clarifier_model import takacs_clarifier_model, takacs_clarifier_soluble_odes  
+from NN import run_prediction_pipeline
 
 # indices: [2..6] are particulate COD; 11 is X_ND (particulate N)
 particulate_cod_idx  = [2, 3, 4, 5, 6] # X_I, X_S, X_H, X_A, X_P
@@ -20,10 +21,11 @@ def map_particulates_by_tss(x_src_13, X_tss_target, MLSS_in_clarifier):
     x_out[all_particulate_idx] = ratio * x_src_13[all_particulate_idx]
     return x_out
 
-def NN_project_to_mass_balance(Xe_hat, Xu_hat, Xf, Qf, Qe, Qu,
+# needs double checking
+def NN_project_to_mass_balance(Xe_hat, Xu_hat, Xf, Q_to_clarifier, Qe, Qu,
                             w_e=1.0, w_u=0.2, bounds=(0.0, 12000.0)):
     Xe_hat = float(Xe_hat); Xu_hat = float(Xu_hat)
-    S = Qf * Xf
+    S = Q_to_clarifier * Xf
     denom = (Qe**2)/w_e + (Qu**2)/w_u
     if denom <= 0.0:
         Xe, Xu = Xe_hat, Xu_hat
@@ -74,12 +76,17 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     # --- 3) Influent & flows ---
     influent_flow, influent_concs = influent_data(t)  # Q0, Zin (13,)
     V_reactors = [1000, 1000, 1333, 1333, 1333]
+
+    # Clarifier feed flow (BSM1): Q_to_clarifier = Q5 - Qa = influent_flow + Qr
     Q_RAS = clarifier_params['Q_RAS']  # return sludge (underflow to Tank 1)
+    Q_to_clarifier = influent_flow + Q_RAS  # do NOT add Q_IR
     Q_w   = clarifier_params['Q_w']          #  wastage
     Q_IR  = 55338                      # internal recycle (Tank5 -> Tank1)
+    Qu    = Q_RAS + Q_w
+    Qe    = Q_to_clarifier - Qu  # = influent_flow - Q_w
 
     # Reactor through-flow is constant in all tanks:
-    # Q_reac = Q0 + Qa + Qr
+    # Q_reac = influent_flow + Qa + Qr
     outflow_rate = influent_flow + Q_IR + Q_RAS
 
     # --- 4) Clarifier feed & MLSS  ---
@@ -87,31 +94,54 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     total_particulate_cod_t5 = np.sum(X_reactors[4, particulate_cod_idx])
     MLSS_in_clarifier = 0.75 * total_particulate_cod_t5
 
-    # Clarifier feed flow (BSM1): Qf = Q5 - Qa = Q0 + Qr
-    Q_to_clarifier = influent_flow + Q_RAS  # do NOT add Q_IR
+    # --- 5) Clarifier model: Takács (dynamic) or NN steady-state (algebraic) ---
+    if clarifier_params.get('mode', 'takacs') == 'nn_ss':
+        Q_unit_scale = 1/24 # m3/d (bsm1) to m3/h (NN)
+        MLSS_unit_scale = 1/1000 # mg/L or g/m3 (bsm1) to g/L or kg/m3 (NN)
+        MLSS_in_clarifier_scaled, Q_to_clarifier_scaled, Qe_scaled, Qu_scaled = MLSS_in_clarifier * MLSS_unit_scale, Q_to_clarifier * Q_unit_scale, Qe * Q_unit_scale, Qu * Q_unit_scale
+        Xe_hat, Xu_hat = run_prediction_pipeline(Q_to_clarifier_scaled, Qu_scaled, MLSS_in_clarifier_scaled, settling_params, plot=False)
+        # Optional: exact steady solids balance (recommended)
+        if clarifier_params.get('project_balance', True):
+            Xe, Xu = NN_project_to_mass_balance(Xe_hat, Xu_hat, MLSS_in_clarifier_scaled, Q_to_clarifier_scaled, Qe_scaled, Qu_scaled)
+        else:
+            Xe, Xu = float(max(0.0, Xe_hat)), float(max(0.0, Xu_hat))
 
-    # --- 5) Run clarifier ODE (pass Vesilind params) (FIXED CALL) ---
-    # Provide minimal defaults if not present
+        # No MLSS dynamics under instantaneous steady assumption
+        clar_dxdt = np.zeros(clarifier_params['N_layers'], dtype=float)
 
-    clar_dxdt, X_u_total, X_e_total = takacs_clarifier_model(
-        y_clarifier,
-        MLSS_in_clarifier,
-        Q_to_clarifier,
-        clarifier_params,
-        settling_params
-    )
+        # Keep soluble advection ODEs (unchanged hydraulics)
+        Z_in_feed = X_reactors[4, soluble_idx]
+        dZdt_flat, Zu_vec, Ze_vec = takacs_clarifier_soluble_odes(Z_layers, Z_in_feed, Q_to_clarifier, clarifier_params)
 
-    # --- 5b) Run soluble-layer advection ODEs ---
-    Z_in_feed = X_reactors[4, soluble_idx]  # Tank 5 solubles at the settler influent
-    dZdt_flat, Zu_vec, Ze_vec = takacs_clarifier_soluble_odes(
-        Z_layers, Z_in_feed, Q_to_clarifier, clarifier_params
-    )
+        # Build RAS from Xu (particulates scaled), solubles from bottom layer
+        RAS_concs_full = map_particulates_by_tss(X_reactors[4, :], Xu, MLSS_in_clarifier)
+        RAS_concs_full[soluble_idx] = Zu_vec
 
-    # --- 6) Build RAS composition by MLSS ratio (particulates scaled, solubles copied) ---
-    RAS_concs_full = map_particulates_by_tss(X_reactors[4, :], X_u_total, MLSS_in_clarifier)
+        clarifier_params['last_Xe'] = float(Xe) # I added this because in the case of the NN, the clarifier doesnt use derivatives so i need to send the solution at ESS and Xras instead.
+        clarifier_params['last_Xu'] = float(Xu)
 
-    # underflow solubles = bottom-layer solubles (Zu)
-    RAS_concs_full[soluble_idx] = Zu_vec
+
+    else:
+
+        clar_dxdt, Xu, Xe = takacs_clarifier_model(
+            y_clarifier,
+            MLSS_in_clarifier,
+            Q_to_clarifier,
+            clarifier_params,
+            settling_params
+        )
+
+        # --- 5b) Run soluble-layer advection ODEs ---
+        Z_in_feed = X_reactors[4, soluble_idx]  # Tank 5 solubles at the settler influent
+        dZdt_flat, Zu_vec, Ze_vec = takacs_clarifier_soluble_odes(
+            Z_layers, Z_in_feed, Q_to_clarifier, clarifier_params
+        )
+
+        # --- 6) Build RAS composition by MLSS ratio (particulates scaled, solubles copied) ---
+        RAS_concs_full = map_particulates_by_tss(X_reactors[4, :], Xu, MLSS_in_clarifier)
+
+        # underflow solubles = bottom-layer solubles (Zu)
+        RAS_concs_full[soluble_idx] = Zu_vec
 
     # --- 7) Reactor mass balances ---
     dydt_reactors = np.zeros_like(X_reactors)

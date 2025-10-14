@@ -389,7 +389,7 @@ def print_results(ess_avg, ras_avg, prediction_data):
     print(f"{'='*60}\n")
 
 
-def run_prediction_pipeline(plot=False):
+def run_prediction_pipeline(Q, Q2, MLSS, settling_params, plot=False):
     """
     Runs the full pipeline:
     - (Optionally) load branch loading and coordinates (kept as comments per original)
@@ -412,13 +412,24 @@ def run_prediction_pipeline(plot=False):
     # u_data = np.load(branch_loading_file)['branch_loading']
     # u_data2 = u_data[case_number].reshape(1, 1, 13)
 
-    Q, Q2, MLSS = 120.1349, 87.5663, 4.7475
-    V0, k = 15.9184, 72.2825
+    # Q, Q2, MLSS = 120.1349, 87.5663, 4.7475
+    # V0, k = 15.9184, 72.2825
+    
+    V0 = settling_params['v0']  # Max settling velocity (m/day)
+
+    # only for vesilian model
+    k = settling_params['Kv']           # Vesilind settling parameter (m^3/g)
+    settling_unit_scale = 1450*1000/math.log(10) # only for vesilian model # sludge density * unit scaling. k = a*ln(10)/desnity. the NN takes a as input not k so a = k*density/ln(10)*unit conversion. 
+    # I call the input to the NN k bt it is actually a
+    V0_scaled = V0 * settling_unit_scale  
+    k_scaled = k * settling_unit_scale        
+
+
     H1, H2, H3, H4 = 0.3897, 3.906, 3.6538, 21.1599
     Y2, Y3, Y4, Theta1 = 2.4559, 4.3597, 1.1072, 6.1677
 
-    u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0, k]).reshape(1, 1, 13)
-    print(f"u_data2: {u_data2.shape}")
+    u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0_scaled, k_scaled]).reshape(1, 1, 13)
+    # print(f"u_data2: {u_data2.shape}")
 
     # trunk_coordinates_file = os.path.join(base_dir, f'trunk_coordinates_{num_cases}_cases_{num_points}_points.npz')
     # y_data_coordinates = np.load(trunk_coordinates_file)['trunk_coordinates']
@@ -428,14 +439,14 @@ def run_prediction_pipeline(plot=False):
     ess_avg, ras_avg, prediction_data = calculate_concentrations(u_data2)
 
     # Print results
-    print_results(ess_avg, ras_avg, prediction_data)
+    # print_results(ess_avg, ras_avg, prediction_data)
 
     # Optional: Plot contour (comment out if not needed)
     if plot:
         update_blockMesh_from_source(H1, H2, H3, H4, Y2, Y3, Y4, Theta1)
         run_blockmesh_output()
         y_data_coordinates2 = extract_trunk_spatial_fixed().reshape(1, -1, 2)
-        print(f"Coordinates shape: {y_data_coordinates2.shape}")
+        # print(f"Coordinates shape: {y_data_coordinates2.shape}")
         prediction_data['y_data_coordinates'] = y_data_coordinates2
         plot_contour(prediction_data)
 
