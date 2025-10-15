@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import os
+import warnings
+from sklearn.exceptions import InconsistentVersionWarning
 
 from scipy.integrate import odeint, solve_ivp
 from scipy.interpolate import interp1d
@@ -11,8 +13,13 @@ from scipy.interpolate import interp1d
 from ASM1_Processes import calculate_process_rates
 from bsm1_simulation import bsm1_plant_model, map_particulates_by_tss, particulate_cod_idx, soluble_idx
 from bsm1_validation import compute_bsm1_kpis, make_bsm1_validation_plot
-# from NN import run_prediction_pipeline
+from NN import load_model, load_scalers, calculate_concentrations
+
 os.makedirs('results', exist_ok=True)
+
+
+def out(*parts):
+    return os.path.join(RESULTS_DIR, *parts)
 
 
 def get_bsm1_params():
@@ -113,8 +120,8 @@ def get_clarifier_params():
         'Q_w': 385,            # wastage
         'feed_layer': 4,    # Feed enters the 5th layer (0-indexed, 0 = TOP)
         'X_t': 3000.0,          # clarification threshold
-        # 'mode': 'takacs',            # 'takacs' or 'nn_ss'
-        'mode': 'nn_ss',            # 'takacs' or 'nn_ss'
+        'mode': 'takacs',            # 'takacs' or 'nn_ss'
+        # 'mode': 'nn_ss',            # 'takacs' or 'nn_ss'
         'project_balance': False,     # keep steady solids balance exact for NN mode
     }
 
@@ -124,8 +131,8 @@ def get_settling_params():
         # 'velocity_model': 'vesilind', # 'takacs' or 'vesilind'
         'velocity_model': 'takacs', # 'takacs' or 'vesilind'
         'v0':  474.0,   # Max Vesilind settling velocity (m/day)
-        # 'Kv':  5.76e-4, # hindered settling parameter rₕ (m^3/g)
-        'Kv':  3.18e-4, # dummy ( at the range of my current NN ( k=a*ln(10)/density/1000= 200*ln(10)/1450/1000) until i create  NN that can handle bsm1 value of 5.76e-4. hindered settling parameter rₕ (m^3/g). e^(−kC)=10^(−(a/1450)C). k=a*ln(10)/1450​.
+        'Kv':  5.76e-4, # hindered settling parameter rₕ (m^3/g)
+        # 'Kv':  3.18e-4, # dummy ( at the range of my current NN ( k=a*ln(10)/density/1000= 200*ln(10)/1450/1000) until i create  NN that can handle bsm1 value of 5.76e-4. hindered settling parameter rₕ (m^3/g). e^(−kC)=10^(−(a/1450)C). k=a*ln(10)/1450​.
         # Takács double-exponential extra parameters
         'v0p': 250.0,   # m/d
         'r_h': 5.76e-4, # m^3/g
@@ -196,6 +203,153 @@ def get_stabilization_influent_data():
 
     return influent_data_function
 
+def rhs_stab(t, y):
+    return bsm1_plant_model(y, t, get_influent_data_stab, stoich_params, Kin_params, clarifier_params, settling_params,
+                            nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices, stab)
+def rhs(t, y):
+    return bsm1_plant_model(y, t, get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params,
+                            nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices, stab)
+
+def plot_across_units(
+    t_span,
+    influent_concs_ts,
+    results_reactors,
+    effluent_ts,
+    ras_ts,
+    component_names,
+    particulate_idx_full,
+    solubles_go_down_by_comp
+):
+    """
+    Reproduces the 'across_units' plotting loop exactly as-is.
+    Requires: global out() to be defined and RESULTS_DIR set.
+    """
+    os.makedirs(out('across_units'), exist_ok=True)
+
+    for comp_idx, comp_name in enumerate(component_names):
+        fig, axes = plt.subplots(8, 1, figsize=(12, 18), sharex=True)
+
+        # 1) Influent
+        axes[0].plot(t_span, influent_concs_ts[:, comp_idx])
+        axes[0].set_title(f'Influent → {comp_name}')
+
+        # 2–6) After Tanks 1–5 (CSTR: tank conc. = tank effluent)
+        for tank in range(5):
+            axes[tank + 1].plot(t_span, results_reactors[:, tank, comp_idx])
+            axes[tank + 1].set_title(f'After Tank {tank + 1} → {comp_name}')
+
+        # 7) Clarifier Effluent
+        axes[6].plot(t_span, effluent_ts[:, comp_idx])
+        axes[6].set_title(f'Clarifier Effluent → {comp_name}')
+
+        # 8) Clarifier RAS
+        show_ras = (comp_idx in particulate_idx_full) or solubles_go_down_by_comp.get(comp_idx, False)
+        axes[7].set_title(f'Clarifier RAS → {comp_name}')
+        if show_ras:
+            axes[7].plot(t_span, ras_ts[:, comp_idx])
+        else:
+            # If solubles don't go down, avoid plotting a misleading line
+            axes[7].text(0.5, 0.5, 'RAS not plotted (no soluble transport detected)',
+                        ha='center', va='center', transform=axes[7].transAxes)
+
+        # Cosmetics
+        for ax in axes:
+            ax.grid(True)
+            ax.set_ylabel('g/m³')
+        axes[-1].set_xlabel('Time (days)')
+
+        fig.suptitle(f'{comp_name}: Influent → Tanks 1–5 → Effluent → RAS', y=0.995)
+        plt.tight_layout()
+        plt.savefig(out(f'across_units/{comp_name}_across_units.png'), dpi=150)
+        plt.close()
+
+def save_across_units_timeseries(
+    t_span,
+    influent_concs_ts,
+    results_reactors,
+    effluent_ts,
+    ras_ts,
+    component_names,
+    particulate_idx_full,
+    solubles_go_down_by_comp
+):
+    """
+    Writes one compressed NPZ per component to:
+        {RESULTS_DIR}/across_units_data/{COMP}.npz
+
+    Each NPZ contains:
+        t_days, influent, tank1..tank5, effluent, ras
+
+    For components where you chose not to plot RAS (solubles that don't change),
+    'ras' is stored as NaNs so the plotter can skip it gracefully.
+    """
+    data_dir = out('across_units_data')
+    os.makedirs(data_dir, exist_ok=True)
+
+    manifest = []  # simple manifest list for convenience
+
+    for comp_idx, comp_name in enumerate(component_names):
+        # Decide whether to include RAS series for this component
+        show_ras = (comp_idx in particulate_idx_full) or solubles_go_down_by_comp.get(comp_idx, False)
+
+        # Build the series
+        series = {
+            't_days'  : np.asarray(t_span, dtype=float),
+            'influent': influent_concs_ts[:, comp_idx].astype(float),
+            'tank1'   : results_reactors[:, 0, comp_idx].astype(float),
+            'tank2'   : results_reactors[:, 1, comp_idx].astype(float),
+            'tank3'   : results_reactors[:, 2, comp_idx].astype(float),
+            'tank4'   : results_reactors[:, 3, comp_idx].astype(float),
+            'tank5'   : results_reactors[:, 4, comp_idx].astype(float),
+            'effluent': effluent_ts[:, comp_idx].astype(float),
+            'ras'     : (ras_ts[:, comp_idx].astype(float)
+                         if show_ras else np.full_like(t_span, np.nan, dtype=float)),
+            'unit'    : 'g/m^3'
+        }
+
+        npz_path = out(f"across_units_data/{comp_name}.npz")
+        np.savez_compressed(npz_path, **series)
+        manifest.append({'component': comp_name, 'path': npz_path})
+
+    # Optional: write a simple manifest JSON for quick discovery
+    try:
+        import json
+        with open(out('across_units_data/manifest.json'), 'w') as f:
+            json.dump(manifest, f, indent=2)
+    except Exception as e:
+        print("Manifest write skipped:", e)
+
+def plot_clarifier_tss_and_save_timeseries(
+    t_span,
+    Xu_ts,
+    Xe_ts
+):
+    """
+    Reproduces the Clarifier TSS figure block (both figures)
+    and saves the ESS/RAS timeseries NPZ file.
+    Requires: global out() to be defined and RESULTS_DIR set.
+    """
+    # Clarifier TSS figure (use Xe, Xu)
+    plt.figure(figsize=(12,6))
+    plt.plot(t_span, Xe_ts, label='Clarifier ESS')
+    plt.title('Plant Effluent TSS'); plt.xlabel('Time (days)'); plt.ylabel('g SS/m^3')
+    plt.legend(); plt.grid(True); plt.yscale('log')
+    plt.savefig(out('effluent_TSS.png')); plt.close()
+
+    plt.figure(figsize=(12,6))
+    plt.plot(t_span, Xu_ts, label='RAS TSS') # Xras is same as Xu because Xu IS split into ras and waste.
+    plt.title('RAS (Underflow) TSS'); plt.xlabel('Time (days)'); plt.ylabel('g SS/m^3')
+    plt.legend(); plt.grid(True)
+    plt.savefig(out('ras_TSS.png')); plt.close()
+
+    # ensure the folder exists before saving (prevents FileNotFoundError)
+    os.makedirs(out('timeseries'), exist_ok=True)
+
+    np.savez(out('timeseries/ess_ras_timeseries.npz'),
+         time_days=t_span,
+         XESS_gSSm3=Xe_ts,
+         Xu_gSSm3=Xu_ts)
+
 # --- Example of how to use it ---
 if __name__ == '__main__':
 
@@ -242,11 +396,14 @@ if __name__ == '__main__':
     # Use an implicit stiff integrator here to avoid tiny explicit Euler steps over 100 days.
     print("Starting 100-day stabilization (constant influent)...")
 
-    def rhs_stab(t, y):
-        return bsm1_plant_model(y, t, get_influent_data_stab, stoich_params, Kin_params, clarifier_params, settling_params)
+    # Loading NN model and scalers (one-time cost)
+    nn_model = load_model()
+    nn_u_scaler, nn_y_scaler, nn_s_scaler = load_scalers()
+    nn_y_indices = np.load('NN_files/trunk_indices_3780_points.npz')['trunk_indices']
 
     # Evaluate every 15 min (matching BSM1 KPI grid; choice of t_eval does not affect the dynamics)
     t_stab_eval = np.arange(0.0, 100.0 + 1.0/96.0, 1.0/96.0)
+    stab=True
     sol_stab = solve_ivp(
         rhs_stab,
         t_span=(float(t_stab_eval[0]), float(t_stab_eval[-1])),
@@ -270,50 +427,53 @@ if __name__ == '__main__':
     # --- 3. Run the Simulation ---
     print("Starting plant-wide simulation... (this may take a moment)")
 
-    def rhs(t, y):
-        return bsm1_plant_model(y, t, get_influent_data, stoich_params, Kin_params, clarifier_params, settling_params)
-
-
     # --- implicit ---   
-    # dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
-    # t_span = np.arange(0.0, 14.0 + dt, dt) 
-    # sol = solve_ivp(
-    #     rhs,
-    #     t_span=(float(t_span[0]), float(t_span[-1])),
-    #     y0=y0,
-    #     t_eval=t_span,
-    #     method='BDF',              # or 'LSODA'
-    #     rtol=1e-5,
-    #     atol=1e-7,
-    #     max_step=dt              # 15 min KPIs. 
-    # )
-    # if not sol.success:
-    #     print("Integrator reported:", sol.message)
-    # solution = sol.y.T
+    dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
+    t_span = np.arange(0.0, 14.0 + dt, dt) 
+    stab=False
+    sol = solve_ivp(
+        rhs,
+        t_span=(float(t_span[0]), float(t_span[-1])),
+        y0=y0,
+        t_eval=t_span,
+        method='BDF',              # or 'LSODA'
+        rtol=1e-5,
+        atol=1e-7,
+        max_step=dt              # 15 min KPIs. 
+    )
+    if not sol.success:
+        print("Integrator reported:", sol.message)
+    solution = sol.y.T
 
     # --- Forward (Explicit) Euler on the fixed grid t_span ---
-    dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
-    t_span = np.arange(0.0, 14.0 + dt, dt) 
-    solution = np.empty((t_span.size, y0.size), dtype=float)
-    solution[0, :] = y0
-    last_day_printed = 0  
-    for k in range(t_span.size - 1):
-        t  = float(t_span[k])
-        dt = float(t_span[k+1] - t_span[k])
-        dydt = rhs(t, solution[k, :])
-        solution[k+1, :] = solution[k, :] + dt * dydt
-        if clarifier_params.get('mode') == 'nn_ss':
-            # Put NN values at top/bottom
-            solution[k+1, 65] = clarifier_params.get('last_Xe', solution[k+1, 65])
-            solution[k+1, 74] = clarifier_params.get('last_Xu', solution[k+1, 74])
-            # print(f"intial solution[{k+1}, 66:74]", solution[k+1, 66:74])
-            solution[k+1, 66:74] = 0.0
-            # print(f"zeroing solution[{k+1}, 66:74]", solution[k+1, 66:74])
+    # dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
+    # t_span = np.arange(0.0, 14.0 + dt, dt) 
+    # stab=False
+    # if clarifier_params.get('mode') == 'nn_ss':
+    #     dt = 0.00001 
+    #     t_span = np.arange(0.0, 14.0 + dt, dt) 
+    # solution = np.empty((t_span.size, y0.size), dtype=float)
+    # solution[0, :] = y0
+    # last_day_printed = 0  
 
-        d = int(t_span[k+1])          
-        if d > last_day_printed:      
-            last_day_printed = d      
-            print(f"Day {d} complete")
+    # for k in range(t_span.size - 1):
+    #     t  = float(t_span[k])
+    #     dt = float(t_span[k+1] - t_span[k])
+    #     dydt = rhs(t, solution[k, :])
+    #     solution[k+1, :] = solution[k, :] + dt * dydt
+    #     if clarifier_params.get('mode') == 'nn_ss':
+    #         # Put NN values at top/bottom
+    #         solution[k+1, 65] = clarifier_params.get('last_Xe', solution[k+1, 65])
+    #         solution[k+1, 74] = clarifier_params.get('last_Xu', solution[k+1, 74])
+    #         # print(f"intial solution[{k+1}, 66:74]", solution[k+1, 66:74])
+    #         # solution[k+1, 66:74] = 0.0
+    #         # solution[k+1, 66:74] = np.linspace(solution[k+1,65], solution[k+1,74], 8)
+    #         # print(f"zeroing solution[{k+1}, 66:74]", solution[k+1, 66:74])
+
+    #     d = int(t_span[k+1])          
+    #     if d > last_day_printed:      
+    #         last_day_printed = d      
+    #         print(f"Day {d} complete")
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
     # print("results_reactors.shape:", results_reactors.shape)
@@ -346,7 +506,6 @@ if __name__ == '__main__':
         # effluent flow
         Q0_t, _    = get_influent_data(tt)
 
-    os.makedirs('results/across_units', exist_ok=True)
 
     kpis = compute_bsm1_kpis(t_span, effluent_ts, get_influent_data, clarifier_params, stoich_params)
     print("[BSM1 7–14 d | 15‑min rectangular, flow‑weighted]")
@@ -367,57 +526,34 @@ if __name__ == '__main__':
         for j in soluble_idx
     }
 
+    RESULTS_DIR = f"results_{clarifier_params.get('mode', 'takacs')}"
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
     # across_units plotting loop
-    # for comp_idx, comp_name in enumerate(component_names):
-    #     fig, axes = plt.subplots(8, 1, figsize=(12, 18), sharex=True)
+    # plot_across_units(
+    #     t_span=t_span,
+    #     influent_concs_ts=influent_concs_ts,
+    #     results_reactors=results_reactors,
+    #     effluent_ts=effluent_ts,
+    #     ras_ts=ras_ts,
+    #     component_names=component_names,
+    #     particulate_idx_full=particulate_idx_full,
+    #     solubles_go_down_by_comp=solubles_go_down_by_comp
+    # )
 
-    #     # 1) Influent
-    #     axes[0].plot(t_span, influent_concs_ts[:, comp_idx])
-    #     axes[0].set_title(f'Influent → {comp_name}')
-
-    #     # 2–6) After Tanks 1–5 (CSTR: tank conc. = tank effluent)
-    #     for tank in range(5):
-    #         axes[tank + 1].plot(t_span, results_reactors[:, tank, comp_idx])
-    #         axes[tank + 1].set_title(f'After Tank {tank + 1} → {comp_name}')
-
-    #     # 7) Clarifier Effluent
-    #     axes[6].plot(t_span, effluent_ts[:, comp_idx])
-    #     axes[6].set_title(f'Clarifier Effluent → {comp_name}')
-
-    #     # 8) Clarifier RAS
-    #     show_ras = (comp_idx in particulate_idx_full) or solubles_go_down_by_comp.get(comp_idx, False)
-    #     axes[7].set_title(f'Clarifier RAS → {comp_name}')
-    #     if show_ras:
-    #         axes[7].plot(t_span, ras_ts[:, comp_idx])
-    #     else:
-    #         # If solubles don't go down, avoid plotting a misleading line
-    #         axes[7].text(0.5, 0.5, 'RAS not plotted (no soluble transport detected)',
-    #                     ha='center', va='center', transform=axes[7].transAxes)
-
-    #     # Cosmetics
-    #     for ax in axes:
-    #         ax.grid(True)
-    #         ax.set_ylabel('g/m³')
-    #     axes[-1].set_xlabel('Time (days)')
-
-    #     fig.suptitle(f'{comp_name}: Influent → Tanks 1–5 → Effluent → RAS', y=0.995)
-    #     plt.tight_layout()
-    #     plt.savefig(f'results/across_units/{comp_name}_across_units.png', dpi=150)
-    #     plt.close()
-
+    save_across_units_timeseries(
+        t_span=t_span,
+        influent_concs_ts=influent_concs_ts,
+        results_reactors=results_reactors,
+        effluent_ts=effluent_ts,
+        ras_ts=ras_ts,
+        component_names=component_names,
+        particulate_idx_full=particulate_idx_full,
+        solubles_go_down_by_comp=solubles_go_down_by_comp
+    )
 
     # Clarifier TSS figure (use Xe, Xu)
-    plt.figure(figsize=(12,6))
-    plt.plot(t_span, TSS_eff_from_cod, label='Effluent TSS from COD states (BSM1)')
-    # Optional: overlay Xe to confirm they coincide
-    plt.plot(t_span, Xe_ts, '--', label='Clarifier top-layer TSS (Xe)', alpha=0.7)
-    plt.title('Plant Effluent TSS'); plt.xlabel('Time (days)'); plt.ylabel('g SS/m^3')
-    plt.legend(); plt.grid(True); plt.yscale('log')
-    plt.savefig('results/effluent_TSS.png'); plt.close()
-
-    # Example 95th percentile required by BSM1:
-    TSSe95 = np.percentile(TSS_eff_from_cod, 95)
-    print("TSSe95 =", TSSe95)
+    plot_clarifier_tss_and_save_timeseries(t_span,Xu_ts,Xe_ts)
 
     # make the validation figure + CSV
-    make_bsm1_validation_plot(kpis, TSSe95)
+    # make_bsm1_validation_plot(kpis, TSSe95)

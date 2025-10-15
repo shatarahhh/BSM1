@@ -20,16 +20,16 @@ wedgeHalfAngle 2.5; // total wedge = 5°, half-angle = 2.5
 tanHalfAngle #calc "tan(degToRad($wedgeHalfAngle))";
 
 //inputs
-H_1 0.3897;
-H_2 3.906;
-H_3 3.6538;
-H_4 21.1599;
+H_1 0.5;
+H_2 4.38;
+H_3 5.475;
+H_4 21.9;
 
-Y_2 2.4559;
-Y_3 4.3597;
-Y_4 1.1072;
+Y_2 1.6;
+Y_3 4;
+Y_4 1.5;
 
-theta_1 6.1677;
+theta_1 5;
 
 // 1) X coordinates
 H_0 0.2;// not used

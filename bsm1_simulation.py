@@ -22,24 +22,25 @@ def map_particulates_by_tss(x_src_13, X_tss_target, MLSS_in_clarifier):
     return x_out
 
 # needs double checking
-def NN_project_to_mass_balance(Xe_hat, Xu_hat, Xf, Q_to_clarifier, Qe, Qu,
-                            w_e=1.0, w_u=0.2, bounds=(0.0, 12000.0)):
-    Xe_hat = float(Xe_hat); Xu_hat = float(Xu_hat)
-    S = Q_to_clarifier * Xf
-    denom = (Qe**2)/w_e + (Qu**2)/w_u
-    if denom <= 0.0:
-        Xe, Xu = Xe_hat, Xu_hat
-    else:
-        lam = (S - Qe*Xe_hat - Qu*Xu_hat) / denom
-        Xe = Xe_hat + lam * (Qe / w_e)
-        Xu = Xu_hat + lam * (Qu / w_u)
-    lo, hi = bounds
-    Xe = float(np.clip(Xe, lo, hi)); Xu = float(np.clip(Xu, lo, hi))
-    if Xu < Xe:  # optional, typical physical guardrail
-        mid = 0.5*(Xe+Xu); Xe, Xu = min(Xe, mid), max(Xu, mid)
-    return Xe, Xu
+# def NN_project_to_mass_balance(Xe_hat, Xu_hat, Xf, Q_to_clarifier, Qe, Qu,
+#                             w_e=1.0, w_u=0.2, bounds=(0.0, 12000.0)):
+#     Xe_hat = float(Xe_hat); Xu_hat = float(Xu_hat)
+#     S = Q_to_clarifier * Xf
+#     denom = (Qe**2)/w_e + (Qu**2)/w_u
+#     if denom <= 0.0:
+#         Xe, Xu = Xe_hat, Xu_hat
+#     else:
+#         lam = (S - Qe*Xe_hat - Qu*Xu_hat) / denom
+#         Xe = Xe_hat + lam * (Qe / w_e)
+#         Xu = Xu_hat + lam * (Qu / w_u)
+#     lo, hi = bounds
+#     Xe = float(np.clip(Xe, lo, hi)); Xu = float(np.clip(Xu, lo, hi))
+#     if Xu < Xe:  # optional, typical physical guardrail
+#         mid = 0.5*(Xe+Xu); Xe, Xu = min(Xe, mid), max(Xu, mid)
+#     return Xe, Xu
 
-def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_params, settling_params):
+def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_params, settling_params,
+                     nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices, stab):
     """
     BSM1 plant dynamics (5 reactors + 10-layer clarifier).
     y has 145 states: 5*13 (reactors) + 10 (clarifier MLSS) + 10*7 (clarifier solubles).
@@ -95,16 +96,20 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
     MLSS_in_clarifier = 0.75 * total_particulate_cod_t5
 
     # --- 5) Clarifier model: Takács (dynamic) or NN steady-state (algebraic) ---
-    if clarifier_params.get('mode', 'takacs') == 'nn_ss':
+    if clarifier_params.get('mode', 'takacs') == 'nn_ss' and stab is False:
         Q_unit_scale = 1/24 # m3/d (bsm1) to m3/h (NN)
         MLSS_unit_scale = 1/1000 # mg/L or g/m3 (bsm1) to g/L or kg/m3 (NN)
         MLSS_in_clarifier_scaled, Q_to_clarifier_scaled, Qe_scaled, Qu_scaled = MLSS_in_clarifier * MLSS_unit_scale, Q_to_clarifier * Q_unit_scale, Qe * Q_unit_scale, Qu * Q_unit_scale
-        Xe_hat, Xu_hat = run_prediction_pipeline(Q_to_clarifier_scaled, Qu_scaled, MLSS_in_clarifier_scaled, settling_params, plot=False)
+        Xe_hat_scaled, Xu_hat_scaled = run_prediction_pipeline(Q_to_clarifier_scaled, Qu_scaled, MLSS_in_clarifier_scaled, settling_params, 
+            nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices, plot=False)
+        # print(f"NN (g/L): Xe_hat_scaled={Xe_hat_scaled:.3f}, Xu_hat_scaled={Xu_hat_scaled:.1f}")
         # Optional: exact steady solids balance (recommended)
-        if clarifier_params.get('project_balance', True):
-            Xe, Xu = NN_project_to_mass_balance(Xe_hat, Xu_hat, MLSS_in_clarifier_scaled, Q_to_clarifier_scaled, Qe_scaled, Qu_scaled)
-        else:
-            Xe, Xu = float(max(0.0, Xe_hat)), float(max(0.0, Xu_hat))
+        Xe_scaled, Xu_scaled = float(max(0.0, Xe_hat_scaled)), float(max(0.0, Xu_hat_scaled))
+        # if clarifier_params.get('project_balance', True):
+        #     Xe_scaled, Xu_scaled = NN_project_to_mass_balance(Xe_hat_scaled, Xu_hat_scaled, MLSS_in_clarifier_scaled, Q_to_clarifier_scaled, Qe_scaled, Qu_scaled)
+        Xe, Xu = Xe_scaled / MLSS_unit_scale, Xu_scaled / MLSS_unit_scale
+        # print(f"NN (g/L): Xe={Xe:.3f}, Xu={Xu:.1f}")
+
 
         # No MLSS dynamics under instantaneous steady assumption
         clar_dxdt = np.zeros(clarifier_params['N_layers'], dtype=float)

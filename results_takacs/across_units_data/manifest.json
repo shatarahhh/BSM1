@@ -1,0 +1,54 @@
+[
+  {
+    "component": "S_I",
+    "path": "results_takacs/across_units_data/S_I.npz"
+  },
+  {
+    "component": "S_S",
+    "path": "results_takacs/across_units_data/S_S.npz"
+  },
+  {
+    "component": "X_I",
+    "path": "results_takacs/across_units_data/X_I.npz"
+  },
+  {
+    "component": "X_S",
+    "path": "results_takacs/across_units_data/X_S.npz"
+  },
+  {
+    "component": "X_H",
+    "path": "results_takacs/across_units_data/X_H.npz"
+  },
+  {
+    "component": "X_A",
+    "path": "results_takacs/across_units_data/X_A.npz"
+  },
+  {
+    "component": "X_P",
+    "path": "results_takacs/across_units_data/X_P.npz"
+  },
+  {
+    "component": "S_O",
+    "path": "results_takacs/across_units_data/S_O.npz"
+  },
+  {
+    "component": "S_NO",
+    "path": "results_takacs/across_units_data/S_NO.npz"
+  },
+  {
+    "component": "S_NH",
+    "path": "results_takacs/across_units_data/S_NH.npz"
+  },
+  {
+    "component": "S_ND",
+    "path": "results_takacs/across_units_data/S_ND.npz"
+  },
+  {
+    "component": "X_ND",
+    "path": "results_takacs/across_units_data/X_ND.npz"
+  },
+  {
+    "component": "S_ALK",
+    "path": "results_takacs/across_units_data/S_ALK.npz"
+  }
+]

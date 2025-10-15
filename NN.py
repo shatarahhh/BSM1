@@ -24,6 +24,8 @@ import pathlib
 from pathlib import Path
 import shutil
 import re
+import warnings
+from sklearn.exceptions import InconsistentVersionWarning
 
 device = "cpu"
 plt.rcParams.update({
@@ -138,16 +140,20 @@ def load_model():
     enc_layers = 2
     fcnn_layers = 6
 
-    branch_load_cfg = [13] + [best_layer] * enc_layers
+    # branch_load_cfg = [13] + [best_layer] * enc_layers
+    branch_load_cfg = [14] + [best_layer] * enc_layers
     coord_cfg = [2] + [best_layer] * enc_layers
     fcnn_cfg = [best_layer] * fcnn_layers + [1]
 
     model = CPNN(coord_cfg, branch_load_cfg, fcnn_cfg).to(device)
     
     # Fixed: map_location and weights_only go INSIDE torch.load()
-    state_dict = torch.load("NN_files/best_val_opt_param_561.pt",
-                           map_location='cpu',
-                           weights_only=True)
+    # state_dict = torch.load("NN_files/best_val_opt_param_561.pt",
+    #                        map_location='cpu',
+    #                        weights_only=True)
+    state_dict = torch.load("NN_files/best_val_opt_param_800.pt",
+                        map_location='cpu',
+                        weights_only=True)
     model.load_state_dict(state_dict)
     model.eval()
     return model
@@ -155,12 +161,14 @@ def load_model():
 
 def load_scalers():
     """Load the pre-trained scalers."""
-    with open("NN_files/scalers/u_scaler.pkl", "rb") as f: 
-        u_scaler = pickle.load(f)
-    with open("NN_files/scalers/y_scaler.pkl", "rb") as f: 
-        y_scaler = pickle.load(f)
-    with open("NN_files/scalers/s_scaler.pkl", "rb") as f: 
-        s_scaler = pickle.load(f)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", InconsistentVersionWarning)
+        with open("NN_files/scalers/u_scaler.pkl", "rb") as f: 
+            u_scaler = pickle.load(f)
+        with open("NN_files/scalers/y_scaler.pkl", "rb") as f: 
+            y_scaler = pickle.load(f)
+        with open("NN_files/scalers/s_scaler.pkl", "rb") as f: 
+            s_scaler = pickle.load(f)
     return u_scaler, y_scaler, s_scaler
 
 
@@ -197,7 +205,7 @@ def mask_irregular_polygon(coordinates, H2, H3, H4, H5, Y2, Y4, Theta1, ymax):
     return mask
 
 
-def calculate_concentrations(u_data):
+def calculate_concentrations(u_data, nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices):
     """
     Main function to calculate ESS and RAS average concentrations.
     
@@ -220,11 +228,11 @@ def calculate_concentrations(u_data):
         Dictionary containing all intermediate data for plotting
     """
     
-    y_data_indices = np.load(f'NN_files/trunk_indices_3780_points.npz')['trunk_indices']
+    y_data_indices = nn_y_indices
 
     # Load model and scalers
-    model = load_model()
-    u_scaler, y_scaler, s_scaler = load_scalers()
+    model = nn_model
+    u_scaler, y_scaler, s_scaler = nn_u_scaler, nn_y_scaler, nn_s_scaler
     
     # Prepare tensors
     y_indices_tensor = torch.tensor(
@@ -233,7 +241,7 @@ def calculate_concentrations(u_data):
     )
 
     u_tensor = torch.tensor(
-        u_scaler.transform(u_data.reshape(-1, u_data.shape[-1])).reshape(1, 1, 13),
+        u_scaler.transform(u_data.reshape(-1, u_data.shape[-1])).reshape(1, 1, u_data.shape[-1]),
         dtype=torch.float32, device=device
     )
     
@@ -263,6 +271,9 @@ def calculate_concentrations(u_data):
     ras_values_positive = np.maximum(0.0, ras_values)  
     ras_avg = np.mean(ras_values_positive)
     
+    # print("ess_positive min/max:", ess_values_positive.min(), ess_values_positive.max())
+    # print("ras_positive min/max:", ras_values_positive.min(), ras_values_positive.max())
+
     # Store data for plotting
     prediction_data = {
         'u_data': u_data,
@@ -292,7 +303,7 @@ def plot_contour(prediction_data, output_dir='contours'):
     y_data_coordinates = prediction_data['y_data_coordinates']
     prediction_unnorm = prediction_data['prediction_unnorm']
     
-    H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0, k = u_data[0, 0, :]
+    H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0, r_h_a, r_p_a1 = u_data[0, 0, :]
     
     # Build X-Y grid & live-zone mask
     xmin, xmax = H1, H4
@@ -389,7 +400,7 @@ def print_results(ess_avg, ras_avg, prediction_data):
     print(f"{'='*60}\n")
 
 
-def run_prediction_pipeline(Q, Q2, MLSS, settling_params, plot=False):
+def run_prediction_pipeline(Q_scaled, Q2_scaled, MLSS_scaled, settling_params, nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices, plot=False):
     """
     Runs the full pipeline:
     - (Optionally) load branch loading and coordinates (kept as comments per original)
@@ -401,7 +412,7 @@ def run_prediction_pipeline(Q, Q2, MLSS, settling_params, plot=False):
     - (Optionally) plot contour
 
     Returns:
-        ess_avg, ras_avg, prediction_data
+        ess_avg, ras_avg
     """
 
     # base_dir = '/lustre/isaac24/scratch/mshatara/openfoam/mshatarah-v2306/run/Secondary_Clarifier/1000_cases/Data_extracted/concatenated_cases'
@@ -410,25 +421,56 @@ def run_prediction_pipeline(Q, Q2, MLSS, settling_params, plot=False):
     # case_number = 1
     # branch_loading_file = os.path.join(base_dir, f'branch_loading_{num_cases}_cases.npz')
     # u_data = np.load(branch_loading_file)['branch_loading']
-    # u_data2 = u_data[case_number].reshape(1, 1, 13)
+    # u_data2 = u_data[case_number].reshape(1, 1, u_data.shape[-1])
 
     # Q, Q2, MLSS = 120.1349, 87.5663, 4.7475
     # V0, k = 15.9184, 72.2825
+    # V0, r_h_a, r_p_a1 = 15.9184, 500, 5000
     
     V0 = settling_params['v0']  # Max settling velocity (m/day)
 
     # only for vesilian model
     k = settling_params['Kv']           # Vesilind settling parameter (m^3/g)
-    settling_unit_scale = 1450*1000/math.log(10) # only for vesilian model # sludge density * unit scaling. k = a*ln(10)/desnity. the NN takes a as input not k so a = k*density/ln(10)*unit conversion. 
+    r_h_a = settling_params['r_h']      # Takacs settling parameter (m^3/g)
+    r_p_a1 = settling_params['r_p']    # Takacs settling parameter (m^3/g)
+    f_ns = settling_params['f_ns']    # Non-settleable solids fraction (0-1)
+
+    V0_unit_scale = 1/24 # m3/d (bsm1) to m3/h (NN)
+    k_settling_unit_scale = 1450*1000/math.log(10) # only for vesilian model # sludge density * unit scaling. k = a*ln(10)/desnity. the NN takes a as input not k so a = k*density/ln(10)*unit conversion. 
+    a_a1_settling_unit_scale = (1-f_ns)*1450*1000 # only for takacs model. r_h_a = a = (1 - f_ns) * rho_d * r_h.
     # I call the input to the NN k bt it is actually a
-    V0_scaled = V0 * settling_unit_scale  
-    k_scaled = k * settling_unit_scale        
+    V0_scaled = V0 * V0_unit_scale
+    # k_scaled = k * settling_unit_scale        
+    r_h_a_scaled = r_h_a * a_a1_settling_unit_scale
+    r_p_a1_scaled = r_p_a1 * a_a1_settling_unit_scale
 
+    H4 = 21.9 # clarifier radius. calcaulted from bsm1. Area = = pi (rout^2-rin^2). A=1500, r_in = 0.5m, 
+    Y3 = 4 #tank side depth. calcaulted from bsm1. In clarifier nomenclature, side‑water depth is the vertical water depth at the wall
 
-    H1, H2, H3, H4 = 0.3897, 3.906, 3.6538, 21.1599
-    Y2, Y3, Y4, Theta1 = 2.4559, 4.3597, 1.1072, 6.1677
+    H1 = 0.5 # inlet pipe radius. h1 assumed from the range to be 0.5.
+    H2 = 0.2 * H4 # hopper radius. H2 assumed from the range to be 15% tank radius. to be less than h3. 
+    H3 = 0.25 * H4 # feedwell radius. h3 assumed from the range to be 20% tank radius h4.
+    Y2 = 0.4 * Y3 # feedwell depth. Y2 assumed from the range to be 40% tank side depth. 30–50% of the side-water depth
+    Y4 = 1.5 # hopper depth. Y4 assumed from the range to be 0.5.
+    Theta1 = 5 # Floor slope indegrees. assumed from the common ranges
 
-    u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0_scaled, k_scaled]).reshape(1, 1, 13)
+    # print(f"H1: {H1}")
+    # print(f"H2: {H2}")
+    # print(f"H3: {H3}")
+    # print(f"H4: {H4}")
+    # print(f"Y2: {Y2}")
+    # print(f"Y3: {Y3}")
+    # print(f"Y4: {Y4}")
+    # print(f"Theta1: {Theta1}")
+    # print(f"Q_scaled: {Q_scaled}")
+    # print(f"Q2_scaled: {Q2_scaled}")
+    # print(f"MLSS_scaled: {MLSS_scaled}")
+    # print(f"V0_scaled: {V0_scaled}")
+    # print(f"r_h_a_scaled: {r_h_a_scaled}")
+    # print(f"r_p_a1_scaled: {r_p_a1_scaled}")
+
+    # u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q_scaled, Q2_scaled, MLSS_scaled, V0_scaled, k_scaled]).reshape(1, 1, 13)
+    u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q_scaled, Q2_scaled, MLSS_scaled, V0_scaled, r_h_a_scaled, r_p_a1_scaled]).reshape(1, 1, 14)
     # print(f"u_data2: {u_data2.shape}")
 
     # trunk_coordinates_file = os.path.join(base_dir, f'trunk_coordinates_{num_cases}_cases_{num_points}_points.npz')
@@ -436,7 +478,7 @@ def run_prediction_pipeline(Q, Q2, MLSS, settling_params, plot=False):
     # y_data_coordinates2 = y_data_coordinates[case_number].reshape(1, -1, 2)
 
     # Calculate concentrations
-    ess_avg, ras_avg, prediction_data = calculate_concentrations(u_data2)
+    ess_avg, ras_avg, prediction_data = calculate_concentrations(u_data2, nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices)
 
     # Print results
     # print_results(ess_avg, ras_avg, prediction_data)
@@ -452,6 +494,69 @@ def run_prediction_pipeline(Q, Q2, MLSS, settling_params, plot=False):
 
     return ess_avg, ras_avg
 
+def run_prediction_pipeline_separate(plot=False):
+    """
+    Runs the full pipeline:
+    - (Optionally) load branch loading and coordinates (kept as comments per original)
+    - Build u_data2 from given scalars
+    - Update and run blockMesh
+    - Extract trunk spatial coordinates
+    - Calculate concentrations
+    - Print results
+    - (Optionally) plot contour
+
+    Returns:
+        ess_avg, ras_avg
+    """
+
+    # base_dir = '/lustre/isaac24/scratch/mshatara/openfoam/mshatarah-v2306/run/Secondary_Clarifier/1000_cases/Data_extracted/concatenated_cases'
+    # num_cases = 703
+    # num_points = 3780
+    # case_number = 1
+    # branch_loading_file = os.path.join(base_dir, f'branch_loading_{num_cases}_cases.npz')
+    # u_data = np.load(branch_loading_file)['branch_loading']
+    # u_data2 = u_data[case_number].reshape(1, 1, u_data.shape[-1])
+
+    Q, Q2, MLSS = 1000, 768, 4.7475
+    # V0, k = 15.9184, 72.2825
+    V0, r_h_a, r_p_a1 = 15.9184, 500, 5000
+
+    # I call the input to the NN k bt it is actually a
+
+    H4 = 21.9 # clarifier radius. calcaulted from bsm1. Area = = pi (rout^2-rin^2). A=1500, r_in = 0.5m, 
+    Y3 = 4 #tank side depth. calcaulted from bsm1. In clarifier nomenclature, side‑water depth is the vertical water depth at the wall
+
+    H1 = 0.5 # inlet pipe radius. h1 assumed from the range to be 0.5.
+    H2 = 0.2 * H4 # hopper radius. H2 assumed from the range to be 15% tank radius. to be less than h3. 
+    H3 = 0.25 * H4 # feedwell radius. h3 assumed from the range to be 20% tank radius h4.
+    Y2 = 0.4 * Y3 # feedwell depth. Y2 assumed from the range to be 40% tank side depth. 30–50% of the side-water depth
+    Y4 = 1.5 # hopper depth. Y4 assumed from the range to be 0.5.
+    Theta1 = 5 # Floor slope indegrees. assumed from the common ranges
+
+    # u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q_scaled, Q2_scaled, MLSS_scaled, V0_scaled, k_scaled]).reshape(1, 1, 13)
+    u_data2 = np.array([H1, H2, H3, H4, Y2, Y3, Y4, Theta1, Q, Q2, MLSS, V0, r_h_a, r_p_a1]).reshape(1, 1, 14)
+    print(f"u_data2: {u_data2.shape}")
+
+    nn_model = load_model()
+    nn_u_scaler, nn_y_scaler, nn_s_scaler = load_scalers()
+    nn_y_indices = np.load('NN_files/trunk_indices_3780_points.npz')['trunk_indices']
+
+    # Calculate concentrations
+    ess_avg, ras_avg, prediction_data = calculate_concentrations(u_data2, nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices)
+
+    # Print results
+    print_results(ess_avg, ras_avg, prediction_data)
+
+    # Optional: Plot contour (comment out if not needed)
+    if plot:
+        update_blockMesh_from_source(H1, H2, H3, H4, Y2, Y3, Y4, Theta1)
+        run_blockmesh_output()
+        y_data_coordinates2 = extract_trunk_spatial_fixed().reshape(1, -1, 2)
+        print(f"Coordinates shape: {y_data_coordinates2.shape}")
+        prediction_data['y_data_coordinates'] = y_data_coordinates2
+        plot_contour(prediction_data)
+
+    return ess_avg, ras_avg
 
 # if __name__ == '__main__':
-#     run_prediction_pipeline(plot=False)
+#     run_prediction_pipeline_separate(plot=True)
