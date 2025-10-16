@@ -118,6 +118,5 @@ def main():
     print("-" * 60)
     print(f"All plots completed! Check {OUTPUT_DIR}")
 
-
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()

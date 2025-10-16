@@ -120,8 +120,8 @@ def get_clarifier_params():
         'Q_w': 385,            # wastage
         'feed_layer': 4,    # Feed enters the 5th layer (0-indexed, 0 = TOP)
         'X_t': 3000.0,          # clarification threshold
-        'mode': 'takacs',            # 'takacs' or 'nn_ss'
-        # 'mode': 'nn_ss',            # 'takacs' or 'nn_ss'
+        # 'mode': 'takacs',            # 'takacs' or 'nn_ss'
+        'mode': 'nn_ss',            # 'takacs' or 'nn_ss'
         'project_balance': False,     # keep steady solids balance exact for NN mode
     }
 
@@ -350,6 +350,66 @@ def plot_clarifier_tss_and_save_timeseries(
          XESS_gSSm3=Xe_ts,
          Xu_gSSm3=Xu_ts)
 
+# instantaneous KPIs at the end of the run (no averaging)
+def compute_end_of_run_kpis(t_span,
+                            effluent_ts,     # shape (T, 13) on solver grid
+                            stoich_params,   # provides f_P, i_XB, i_XP
+                            Xu_last=None):   # optional: bottom-layer TSS (underflow)
+    """
+    Compute instantaneous effluent KPIs at the final time step of the current run.
+
+    This returns values directly from the last available sample in `effluent_ts`,
+    without averaging across days 7–14 or resampling to a KPI grid.
+
+    Returns a dict with keys:
+    - CODt: Total COD in effluent (g COD/m^3)
+    - Ntot: Total nitrogen in effluent (g N/m^3)
+    - SNH : Ammonium nitrogen (g N/m^3)
+    - TSS : Total suspended solids (g SS/m^3)
+    - BOD5: 5-day BOD (g/m^3)
+    - t_last: final simulation time (days)
+    """
+    if effluent_ts is None or len(effluent_ts) == 0:
+        raise ValueError("effluent_ts is empty; cannot compute end-of-run KPIs")
+    if t_span is None or len(t_span) == 0:
+        raise ValueError("t_span is empty; cannot compute end-of-run KPIs")
+
+    # Take the last effluent state (shape (13,))
+    eff_last = np.asarray(effluent_ts[-1, :], dtype=float)
+
+    # Indices as per ASM1 order used above
+    part_idx = [2, 3, 4, 5, 6]
+    COD_idx  = [0, 1, 2, 3, 4, 5, 6]
+
+    # Derived series at the last time step
+    TSS_last  = 0.75 * float(eff_last[part_idx].sum())
+    CODt_last =        float(eff_last[COD_idx].sum())
+
+    f_P   = float(stoich_params['f_P'])
+    BOD5_last = 0.25 * (
+        eff_last[1] + eff_last[3] + (1.0 - f_P) * (eff_last[4] + eff_last[5])
+    )
+
+    i_XB  = float(stoich_params['i_XB'])
+    i_XP  = float(stoich_params['i_XP'])
+    Nkj_last = (
+        eff_last[9] + eff_last[10] + eff_last[11]
+        + i_XB * (eff_last[4] + eff_last[5])
+        + i_XP * eff_last[6]
+    )
+    Ntot_last = eff_last[8] + Nkj_last
+
+    return {
+        'CODt': float(CODt_last),
+        'Ntot': float(Ntot_last),
+        'SNH' : float(eff_last[9]),
+        'TSS' : float(TSS_last),
+        'BOD5': float(BOD5_last),
+        'Xu'  : (float(Xu_last) if Xu_last is not None else np.nan),
+        't_last': float(t_span[-1]),
+    }
+
+
 # --- Example of how to use it ---
 if __name__ == '__main__':
 
@@ -417,7 +477,7 @@ if __name__ == '__main__':
     if not sol_stab.success:
         print("Stabilization integrator reported:", sol_stab.message)
     y0 = sol_stab.y[:, -1]  # <-- This is now the initial state for the 14-day run
-    np.save('results/y0_after_100day_stabilization.npy', y0)
+    # np.save('results/y0_after_100day_stabilization.npy', y0)
     print("Stabilization finished. y0 for dynamic run saved to results/y0_after_100day_stabilization.npy")
 
     # ---- Table 8 steady-state (open-loop) check. Xu (underflow/RAS solids concentration) ----
@@ -428,52 +488,52 @@ if __name__ == '__main__':
     print("Starting plant-wide simulation... (this may take a moment)")
 
     # --- implicit ---   
-    dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
-    t_span = np.arange(0.0, 14.0 + dt, dt) 
-    stab=False
-    sol = solve_ivp(
-        rhs,
-        t_span=(float(t_span[0]), float(t_span[-1])),
-        y0=y0,
-        t_eval=t_span,
-        method='BDF',              # or 'LSODA'
-        rtol=1e-5,
-        atol=1e-7,
-        max_step=dt              # 15 min KPIs. 
-    )
-    if not sol.success:
-        print("Integrator reported:", sol.message)
-    solution = sol.y.T
-
-    # --- Forward (Explicit) Euler on the fixed grid t_span ---
-    # dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
+    # dt = 1.0/96.0  # implicit. 15 min in days. Similar to bsm1 output
     # t_span = np.arange(0.0, 14.0 + dt, dt) 
     # stab=False
-    # if clarifier_params.get('mode') == 'nn_ss':
-    #     dt = 0.00001 
-    #     t_span = np.arange(0.0, 14.0 + dt, dt) 
-    # solution = np.empty((t_span.size, y0.size), dtype=float)
-    # solution[0, :] = y0
-    # last_day_printed = 0  
+    # sol = solve_ivp(
+    #     rhs,
+    #     t_span=(float(t_span[0]), float(t_span[-1])),
+    #     y0=y0,
+    #     t_eval=t_span,
+    #     method='BDF',              # or 'LSODA'
+    #     rtol=1e-5,
+    #     atol=1e-7,
+    #     max_step=dt              # 15 min KPIs. 
+    # )
+    # if not sol.success:
+    #     print("Integrator reported:", sol.message)
+    # solution = sol.y.T
 
-    # for k in range(t_span.size - 1):
-    #     t  = float(t_span[k])
-    #     dt = float(t_span[k+1] - t_span[k])
-    #     dydt = rhs(t, solution[k, :])
-    #     solution[k+1, :] = solution[k, :] + dt * dydt
-    #     if clarifier_params.get('mode') == 'nn_ss':
-    #         # Put NN values at top/bottom
-    #         solution[k+1, 65] = clarifier_params.get('last_Xe', solution[k+1, 65])
-    #         solution[k+1, 74] = clarifier_params.get('last_Xu', solution[k+1, 74])
-    #         # print(f"intial solution[{k+1}, 66:74]", solution[k+1, 66:74])
-    #         # solution[k+1, 66:74] = 0.0
-    #         # solution[k+1, 66:74] = np.linspace(solution[k+1,65], solution[k+1,74], 8)
-    #         # print(f"zeroing solution[{k+1}, 66:74]", solution[k+1, 66:74])
+    # --- Forward (Explicit) Euler on the fixed grid t_span ---
+    dt = 0.00001  # explicit euler. dtsettle ≲ 0.4/250=0.0016d. 0.0001 was found to show time independene 
+    t_span = np.arange(0.0, 14.0 + dt, dt) 
+    stab=False
+    if clarifier_params.get('mode') == 'nn_ss':
+        dt = 0.00001
+        t_span = np.arange(0.0, 0.2 + dt, dt) 
+    solution = np.empty((t_span.size, y0.size), dtype=float)
+    solution[0, :] = y0
+    last_day_printed = 0  
 
-    #     d = int(t_span[k+1])          
-    #     if d > last_day_printed:      
-    #         last_day_printed = d      
-    #         print(f"Day {d} complete")
+    for k in range(t_span.size - 1):
+        t  = float(t_span[k])
+        dt = float(t_span[k+1] - t_span[k])
+        dydt = rhs(t, solution[k, :])
+        solution[k+1, :] = solution[k, :] + dt * dydt
+        if clarifier_params.get('mode') == 'nn_ss':
+            # Put NN values at top/bottom
+            solution[k+1, 65] = clarifier_params.get('last_Xe', solution[k+1, 65])
+            solution[k+1, 74] = clarifier_params.get('last_Xu', solution[k+1, 74])
+            # print(f"intial solution[{k+1}, 66:74]", solution[k+1, 66:74])
+            # solution[k+1, 66:74] = 0.0
+            # solution[k+1, 66:74] = np.linspace(solution[k+1,65], solution[k+1,74], 8)
+            # print(f"zeroing solution[{k+1}, 66:74]", solution[k+1, 66:74])
+
+        d = int(10*t_span[k+1])          
+        if d > last_day_printed:      
+            last_day_printed = d      
+            print(f"Day {0.1*d} complete")
 
     results_reactors  = solution[:, 0:65].reshape(len(t_span), 5, 13)
     # print("results_reactors.shape:", results_reactors.shape)
@@ -506,11 +566,8 @@ if __name__ == '__main__':
         # effluent flow
         Q0_t, _    = get_influent_data(tt)
 
-
-    kpis = compute_bsm1_kpis(t_span, effluent_ts, get_influent_data, clarifier_params, stoich_params)
-    print("[BSM1 7–14 d | 15‑min rectangular, flow‑weighted]")
-    for k, v in kpis.items():
-        print(f"{k}: {v:.3f}")
+    end_kpis = compute_end_of_run_kpis(t_span, effluent_ts, stoich_params, Xu_last=Xu_ts[-1])
+    print(end_kpis)
 
     component_names = ['S_I','S_S','X_I','X_S','X_H','X_A','X_P','S_O','S_NO','S_NH','S_ND','X_ND','S_ALK']
 
@@ -530,16 +587,16 @@ if __name__ == '__main__':
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # across_units plotting loop
-    # plot_across_units(
-    #     t_span=t_span,
-    #     influent_concs_ts=influent_concs_ts,
-    #     results_reactors=results_reactors,
-    #     effluent_ts=effluent_ts,
-    #     ras_ts=ras_ts,
-    #     component_names=component_names,
-    #     particulate_idx_full=particulate_idx_full,
-    #     solubles_go_down_by_comp=solubles_go_down_by_comp
-    # )
+    plot_across_units(
+        t_span=t_span,
+        influent_concs_ts=influent_concs_ts,
+        results_reactors=results_reactors,
+        effluent_ts=effluent_ts,
+        ras_ts=ras_ts,
+        component_names=component_names,
+        particulate_idx_full=particulate_idx_full,
+        solubles_go_down_by_comp=solubles_go_down_by_comp
+    )
 
     save_across_units_timeseries(
         t_span=t_span,
@@ -556,4 +613,8 @@ if __name__ == '__main__':
     plot_clarifier_tss_and_save_timeseries(t_span,Xu_ts,Xe_ts)
 
     # make the validation figure + CSV
+    # kpis = compute_bsm1_kpis(t_span, effluent_ts, get_influent_data, clarifier_params, stoich_params)
+    # print("[BSM1 7–14 d | 15‑min rectangular, flow‑weighted]")
+    # for k, v in kpis.items():
+    #     print(f"{k}: {v:.3f}")
     # make_bsm1_validation_plot(kpis, TSSe95)

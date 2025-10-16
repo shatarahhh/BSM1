@@ -102,7 +102,7 @@ def bsm1_plant_model(y, t, influent_data, stoich_params, Kin_params, clarifier_p
         MLSS_in_clarifier_scaled, Q_to_clarifier_scaled, Qe_scaled, Qu_scaled = MLSS_in_clarifier * MLSS_unit_scale, Q_to_clarifier * Q_unit_scale, Qe * Q_unit_scale, Qu * Q_unit_scale
         Xe_hat_scaled, Xu_hat_scaled = run_prediction_pipeline(Q_to_clarifier_scaled, Qu_scaled, MLSS_in_clarifier_scaled, settling_params, 
             nn_model, nn_u_scaler, nn_y_scaler, nn_s_scaler, nn_y_indices, plot=False)
-        # print(f"NN (g/L): Xe_hat_scaled={Xe_hat_scaled:.3f}, Xu_hat_scaled={Xu_hat_scaled:.1f}")
+        print(f"NN (g/L): Xe_hat_scaled={Xe_hat_scaled:.7f}, Xu_hat_scaled={Xu_hat_scaled:.7f}")
         # Optional: exact steady solids balance (recommended)
         Xe_scaled, Xu_scaled = float(max(0.0, Xe_hat_scaled)), float(max(0.0, Xu_hat_scaled))
         # if clarifier_params.get('project_balance', True):
